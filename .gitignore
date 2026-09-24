@@ -20,6 +20,7 @@ mobile-test*.png
 security-test.png
 terminal-test.png
 setup-wizard-test.png
+agent-audit.jsonl
 
 # Editor and OS state.
 .DS_Store

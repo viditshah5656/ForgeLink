@@ -19,7 +19,7 @@ The local browser wizard opens at `http://127.0.0.1:24023` and walks through eve
 1. Creates or locates your OpenAI tunnel.
 2. Creates a runtime API key with **Tunnels Read + Use**.
 3. Lets you browse this PC and select one or more coding folders.
-4. Optionally enables the PowerShell MCP tool.
+4. Chooses execution access: **Off**, **Guarded** (Git/tests/build scripts only), or **Full** PowerShell.
 5. Downloads the current official `tunnel-client`, verifies its SHA-256 checksum, encrypts your key for your Windows account, and starts the service.
 
 The setup wizard is localhost-only and the API key is never printed, returned by an API, logged, or committed.
@@ -46,13 +46,26 @@ Secure MCP Tunnel is an outbound-only bridge; it needs a tunnel ID, a runtime AP
 
 Keep the resulting PowerShell window open. Use the local dashboard at [http://127.0.0.1:24025/dashboard/](http://127.0.0.1:24025/dashboard/) to inspect status, add folders, view logs, and control terminal access.
 
+## Agentic coding workflow
+
+When you enable the Local Files plugin in a ChatGPT chat, it now supports a disciplined coding loop:
+
+1. `inspect_workspace` identifies the project, its scripts, and Git state.
+2. `search_text`, `directory_tree`, and file reads locate the relevant implementation.
+3. File tools make only the requested edit inside folders you allowed.
+4. `get_git_diff` checks the actual change afterward.
+5. `run_project_task` runs a bounded Git, Node, npm, Python, or .NET verification command.
+
+Use a prompt such as: “Inspect this project, explain your plan, make the smallest safe change, then show the Git diff and run the relevant test.”
+
 ## Security model
 
 - Filesystem tools are confined to folders you add in the local UI.
 - The dashboard and MCP listener bind to `127.0.0.1` only.
 - The tunnel makes outbound HTTPS connections to OpenAI; it does not create a public listener.
 - The runtime key is protected by Windows DPAPI for the current Windows account.
-- Terminal access is off by default. When enabled, PowerShell has your Windows user permissions and is intentionally broader than the folder list.
+- Execution is off by default. **Guarded** mode permits only an allowlisted set of project tasks (`git status`, `git diff`, tests, and named npm scripts). **Full** mode permits arbitrary PowerShell and has your Windows user permissions, so it is intentionally broader than the folder list.
+- Every terminal mode change and execution is recorded locally in `agent-audit.jsonl`. Full command contents are not stored; only a SHA-256 fingerprint, working folder, and exit code are recorded.
 - Git ignores `.env`, `access-config.json`, encrypted keys, tunnel profiles, logs, downloaded binaries, and local screenshots.
 
 Run the pre-push safety audit at any time:

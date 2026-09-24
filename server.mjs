@@ -17,6 +17,8 @@ import { InvalidGrantError, InvalidRequestError } from "@modelcontextprotocol/sd
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_DIR = path.join(here, "web");
 const ACCESS_CONFIG_FILE = path.join(here, "access-config.json");
+const AUDIT_LOG_FILE = path.join(here, "agent-audit.jsonl");
+const MAX_SEARCH_FILE_SIZE = 1024 * 1024;
 
 async function loadEnv() {
   const envFile = path.join(here, ".env");
@@ -65,7 +67,7 @@ async function validateRoot(input) {
   return root;
 }
 
-let accessSettings = { allowedRoots: [await validateRoot(ROOT_INPUT)], terminalEnabled: false };
+let accessSettings = { allowedRoots: [await validateRoot(ROOT_INPUT)], terminalMode: "off" };
 try {
   const stored = JSON.parse(await fsp.readFile(ACCESS_CONFIG_FILE, "utf8"));
   const roots = [];
@@ -73,7 +75,9 @@ try {
     try { roots.push(await validateRoot(candidate)); } catch {}
   }
   if (roots.length) accessSettings.allowedRoots = [...new Set(roots.map((root) => root.toLowerCase()))].map((lower) => roots.find((root) => root.toLowerCase() === lower));
-  accessSettings.terminalEnabled = stored.terminalEnabled === true;
+  accessSettings.terminalMode = ["off", "safe", "full"].includes(stored.terminalMode)
+    ? stored.terminalMode
+    : stored.terminalEnabled === true ? "full" : "off";
 } catch (error) {
   if (error?.code !== "ENOENT") console.warn("Ignoring invalid access-config.json:", error.message);
 }
@@ -82,6 +86,15 @@ async function saveAccessSettings() {
   const temporary = `${ACCESS_CONFIG_FILE}.tmp`;
   await fsp.writeFile(temporary, `${JSON.stringify(accessSettings, null, 2)}\n`, { mode: 0o600 });
   await fsp.rename(temporary, ACCESS_CONFIG_FILE);
+}
+
+function terminalEnabled() {
+  return accessSettings.terminalMode !== "off";
+}
+
+async function writeAudit(action, details = {}) {
+  const entry = { at: new Date().toISOString(), action, ...details };
+  try { await fsp.appendFile(AUDIT_LOG_FILE, `${JSON.stringify(entry)}\n`, { mode: 0o600 }); } catch {}
 }
 
 function matchingRoot(candidate) {
@@ -251,16 +264,21 @@ function textResult(text) {
 
 const TOOL_CATALOG = [
   ["list_allowed_directories", "Inspect every permitted filesystem root", "Read"],
+  ["inspect_workspace", "Identify project files, runtimes, and Git state", "Read"],
   ["list_directory", "Browse files and folders in one directory", "Read"],
   ["directory_tree", "Build a recursive directory map", "Read"],
   ["read_text_file", "Read a UTF-8 text file up to 5 MiB", "Read"],
   ["read_multiple_files", "Read up to 50 text files in one request", "Read"],
   ["search_files", "Find paths using glob patterns", "Read"],
+  ["search_text", "Search source text with line numbers", "Read"],
   ["get_file_info", "Inspect timestamps, size, and type", "Read"],
+  ["get_git_status", "Read Git branch and working-tree status", "Read"],
+  ["get_git_diff", "Read a bounded Git diff before or after edits", "Read"],
   ["write_file", "Create or overwrite a text file", "Write"],
   ["create_directory", "Create a directory and missing parents", "Write"],
   ["move_file", "Move or rename a file or directory", "Write"],
   ["delete_file", "Delete one file; directories are protected", "Delete"],
+  ["run_project_task", "Run a bounded project test, build, or Git inspection task", "Execute"],
   ["run_terminal_command", "Run a PowerShell command when terminal access is enabled", "Execute"],
 ].map(([name, description, access]) => ({ name, description, access }));
 
@@ -284,33 +302,54 @@ function terminalEnvironment() {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(key|token|secret|password|credential|authorization)/i.test(key)));
 }
 
-async function runTerminalCommand(command, cwd, timeoutSeconds = 30) {
-  if (!accessSettings.terminalEnabled) throw new Error("Terminal access is disabled. Enable it from the local dashboard first.");
-  if (typeof command !== "string" || !command.trim()) throw new Error("A command is required");
+async function runProcess(program, args, cwd, timeoutSeconds = 30) {
   const workingDirectory = await confinedPath(cwd || accessSettings.allowedRoots[0]);
-  if (!(await fsp.stat(workingDirectory)).isDirectory()) throw new Error("Terminal working directory must be a folder");
+  if (!(await fsp.stat(workingDirectory)).isDirectory()) throw new Error("Working directory must be a folder");
   const timeout = Math.min(Math.max(Number(timeoutSeconds) || 30, 1), 120) * 1000;
   return await new Promise((resolve, reject) => {
-    const child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
-      cwd: workingDirectory,
-      env: terminalEnvironment(),
-      windowsHide: true,
-      shell: false,
-    });
+    const child = spawn(program, args, { cwd: workingDirectory, env: terminalEnvironment(), windowsHide: true, shell: false });
     let stdout = "", stderr = "", total = 0, settled = false, timer;
     const limit = 512 * 1024;
     const finish = (callback, value) => { if (settled) return; settled = true; clearTimeout(timer); callback(value); };
     const collect = (target) => (chunk) => {
       const text = chunk.toString("utf8"); total += Buffer.byteLength(text);
       if (target === "stdout") stdout += text; else stderr += text;
-      if (total > limit) { child.kill(); finish(reject, new Error("Terminal output exceeded 512 KiB and the command was stopped")); }
+      if (total > limit) { child.kill(); finish(reject, new Error("Command output exceeded 512 KiB and the command was stopped")); }
     };
     child.stdout.on("data", collect("stdout"));
     child.stderr.on("data", collect("stderr"));
     child.on("error", (error) => finish(reject, error));
-    child.on("close", (code) => finish(resolve, { command, cwd: workingDirectory, exitCode: code, stdout, stderr }));
+    child.on("close", (code) => finish(resolve, { program, args, cwd: workingDirectory, exitCode: code, stdout, stderr }));
     timer = setTimeout(() => { child.kill(); finish(reject, new Error(`Command timed out after ${timeout / 1000} seconds`)); }, timeout);
   });
+}
+
+async function runTerminalCommand(command, cwd, timeoutSeconds = 30) {
+  if (accessSettings.terminalMode !== "full") throw new Error("Full terminal access is disabled. Enable Full mode from the local dashboard first.");
+  if (typeof command !== "string" || !command.trim()) throw new Error("A command is required");
+  const result = await runProcess("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], cwd, timeoutSeconds);
+  await writeAudit("terminal.full", { cwd: result.cwd, commandSha256: crypto.createHash("sha256").update(command).digest("hex"), exitCode: result.exitCode });
+  return { ...result, command };
+}
+
+async function runProjectTask(task, cwd, script, timeoutSeconds = 120) {
+  if (!terminalEnabled()) throw new Error("Project commands are disabled. Enable Guarded or Full terminal mode from the local dashboard.");
+  const safeScript = typeof script === "string" && /^[A-Za-z0-9:_-]+$/.test(script) ? script : null;
+  const tasks = {
+    "git-status": ["git.exe", ["status", "--short", "--branch"]],
+    "git-diff": ["git.exe", ["--no-pager", "diff", "--stat"]],
+    "npm-test": ["npm.cmd", ["test"]],
+    "npm-run": safeScript ? ["npm.cmd", ["run", safeScript]] : null,
+    "node-test": ["node.exe", ["--test"]],
+    "python-pytest": ["python.exe", ["-m", "pytest"]],
+    "python-unittest": ["python.exe", ["-m", "unittest", "discover"]],
+    "dotnet-test": ["dotnet.exe", ["test", "--no-restore"]],
+  };
+  const selected = tasks[task];
+  if (!selected) throw new Error("Unsupported project task. Use one of the documented task identifiers.");
+  const result = await runProcess(selected[0], selected[1], cwd, timeoutSeconds);
+  await writeAudit("terminal.guarded", { task, cwd: result.cwd, exitCode: result.exitCode });
+  return result;
 }
 
 async function walk(directory, options = {}) {
@@ -332,11 +371,64 @@ async function walk(directory, options = {}) {
   return results;
 }
 
+async function inspectWorkspace(directory) {
+  const target = await confinedPath(directory);
+  if (!(await fsp.stat(target)).isDirectory()) throw new Error("Workspace path must be a folder");
+  const markerNames = ["package.json", "pyproject.toml", "requirements.txt", "Cargo.toml", "go.mod", "pom.xml", "README.md", ".git"];
+  const present = [];
+  for (const name of markerNames) {
+    try { await fsp.access(path.join(target, name)); present.push(name); } catch {}
+  }
+  try {
+    if ((await fsp.readdir(target)).some((name) => name.toLowerCase().endsWith(".sln"))) present.push("*.sln");
+  } catch {}
+  let packageInfo = null;
+  try {
+    const pkg = JSON.parse(await fsp.readFile(path.join(target, "package.json"), "utf8"));
+    packageInfo = { name: pkg.name || null, version: pkg.version || null, scripts: Object.keys(pkg.scripts || {}).sort() };
+  } catch {}
+  let git = null;
+  try {
+    const result = await runProcess("git.exe", ["status", "--short", "--branch"], target, 20);
+    git = { available: true, status: result.stdout.trim(), exitCode: result.exitCode };
+  } catch { git = { available: false }; }
+  return { workspace: target, markers: present, package: packageInfo, git };
+}
+
+async function searchText(directory, query, options = {}) {
+  if (typeof query !== "string" || !query.trim()) throw new Error("Search text is required");
+  if (query.length > 500) throw new Error("Search text must be 500 characters or fewer");
+  const target = await confinedPath(directory);
+  const maxResults = Math.min(Math.max(Number(options.maxResults) || 100, 1), 300);
+  const needle = options.caseSensitive ? query : query.toLowerCase();
+  const items = await walk(target, { maxEntries: 3000, excludePatterns: options.excludePatterns || ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**"] });
+  const matches = [];
+  for (const item of items) {
+    if (matches.length >= maxResults || item.isDirectory) continue;
+    try {
+      const stat = await fsp.stat(item.full);
+      if (stat.size > MAX_SEARCH_FILE_SIZE) continue;
+      const raw = await fsp.readFile(item.full);
+      if (raw.includes(0)) continue;
+      const lines = raw.toString("utf8").split(/\r?\n/);
+      for (let index = 0; index < lines.length && matches.length < maxResults; index += 1) {
+        const comparable = options.caseSensitive ? lines[index] : lines[index].toLowerCase();
+        if (comparable.includes(needle)) matches.push({ path: item.relative, line: index + 1, text: lines[index].slice(0, 500) });
+      }
+    } catch {}
+  }
+  return { query, workspace: target, matches, truncated: matches.length >= maxResults };
+}
+
 function createFilesystemServer() {
-  const server = new McpServer({ name: "local-coding-files", version: "2.1.0" });
+  const server = new McpServer({ name: "local-coding-files", version: "2.2.0" });
   const common = { _meta: oauthMeta() };
 
   server.registerTool("list_allowed_directories", { description: "Show all filesystem roots available to this server.", inputSchema: {}, annotations: { readOnlyHint: true }, ...common }, async () => textResult(accessSettings.allowedRoots.join("\n")));
+
+  server.registerTool("inspect_workspace", { description: "Inspect a selected project folder before editing. Returns recognized project markers, package scripts, and a read-only Git status summary.", inputSchema: { path: z.string() }, annotations: { readOnlyHint: true }, ...common }, async ({ path: input }) => {
+    return textResult(JSON.stringify(await inspectWorkspace(input), null, 2));
+  });
 
   server.registerTool("list_directory", { description: "List files and directories directly inside a directory under C:\\Coding.", inputSchema: { path: z.string() }, annotations: { readOnlyHint: true }, ...common }, async ({ path: input }) => {
     const target = await confinedPath(input);
@@ -383,10 +475,37 @@ function createFilesystemServer() {
     return textResult(items.filter((item) => minimatch(item.relative, pattern, { dot: true, nocase: true })).map((item) => item.full).join("\n") || "No matches found");
   });
 
+  server.registerTool("search_text", { description: "Search text content in a project folder and return bounded matching lines with file paths and line numbers. Skips binaries, large files, and common generated folders by default.", inputSchema: { path: z.string(), query: z.string().min(1).max(500), caseSensitive: z.boolean().optional().default(false), excludePatterns: z.array(z.string()).optional().default(["**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**"]), maxResults: z.number().int().min(1).max(300).optional().default(100) }, annotations: { readOnlyHint: true }, ...common }, async ({ path: input, query, caseSensitive, excludePatterns, maxResults }) => {
+    return textResult(JSON.stringify(await searchText(input, query, { caseSensitive, excludePatterns, maxResults }), null, 2));
+  });
+
   server.registerTool("get_file_info", { description: "Get metadata for a file or directory under C:\\Coding.", inputSchema: { path: z.string() }, annotations: { readOnlyHint: true }, ...common }, async ({ path: input }) => {
     const target = await confinedPath(input);
     const stat = await fsp.stat(target);
     return textResult(JSON.stringify({ path: target, type: stat.isDirectory() ? "directory" : "file", size: stat.size, created: stat.birthtime.toISOString(), modified: stat.mtime.toISOString() }, null, 2));
+  });
+
+  server.registerTool("get_git_status", { description: "Read the current Git branch and working-tree status in an allowed project folder. Does not modify Git state.", inputSchema: { path: z.string() }, annotations: { readOnlyHint: true }, ...common }, async ({ path: input }) => {
+    const result = await runProcess("git.exe", ["status", "--short", "--branch"], input, 30);
+    return textResult(JSON.stringify(result, null, 2));
+  });
+
+  server.registerTool("get_git_diff", { description: "Read a bounded Git diff for an allowed project folder. Use before/after edits to verify changes. Does not modify Git state.", inputSchema: { path: z.string(), staged: z.boolean().optional().default(false), file: z.string().optional() }, annotations: { readOnlyHint: true }, ...common }, async ({ path: input, staged, file }) => {
+    const target = await confinedPath(input);
+    if (!(await fsp.stat(target)).isDirectory()) throw new Error("Git path must be a folder");
+    let args = ["--no-pager", "diff", "--no-ext-diff", "--stat"];
+    if (staged) args.push("--cached");
+    if (file) {
+      const requestedFile = await confinedPath(path.isAbsolute(file) ? file : path.join(target, file));
+      const relativeFile = path.relative(target, requestedFile);
+      if (relativeFile.startsWith("..") || path.isAbsolute(relativeFile)) throw new Error("The requested diff file is outside the project folder");
+      args = ["--no-pager", "diff", "--no-ext-diff"];
+      if (staged) args.push("--cached");
+      args.push("--", relativeFile);
+    }
+    const result = await runProcess("git.exe", args, target, 30);
+    const bounded = `${result.stdout}${result.stderr}`.slice(0, 256 * 1024);
+    return textResult(JSON.stringify({ ...result, stdout: bounded, stderr: "", truncated: bounded.length < result.stdout.length + result.stderr.length }, null, 2));
   });
 
   server.registerTool("write_file", { description: "Create or overwrite a UTF-8 text file under C:\\Coding.", inputSchema: { path: z.string(), content: z.string() }, annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: true }, ...common }, async ({ path: input, content }) => {
@@ -416,8 +535,18 @@ function createFilesystemServer() {
     return textResult(`Deleted ${target}`);
   });
 
+  server.registerTool("run_project_task", {
+    description: "Run a bounded coding workflow inside an allowed project: Git inspection, tests, or an npm script. Available in Guarded or Full terminal mode. It never accepts shell syntax or arbitrary commands.",
+    inputSchema: { task: z.enum(["git-status", "git-diff", "npm-test", "npm-run", "node-test", "python-pytest", "python-unittest", "dotnet-test"]), cwd: z.string(), script: z.string().regex(/^[A-Za-z0-9:_-]+$/).optional(), timeoutSeconds: z.number().int().min(1).max(120).optional().default(120) },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    ...common,
+  }, async ({ task, cwd, script, timeoutSeconds }) => {
+    if (task === "npm-run" && !script) throw new Error("npm-run requires a package script name");
+    return textResult(JSON.stringify(await runProjectTask(task, cwd, script, timeoutSeconds), null, 2));
+  });
+
   server.registerTool("run_terminal_command", {
-    description: "Run a PowerShell command on the user's Windows PC. This tool works only while terminal access is explicitly enabled in the local dashboard. The starting directory must be inside an allowed folder, but an enabled terminal is powerful and commands may access resources beyond it.",
+    description: "Run an arbitrary PowerShell command on the user's Windows PC. This works only when the owner explicitly enables Full terminal mode in the local dashboard. The starting directory must be inside an allowed folder, but Full mode can access other resources with the user's Windows permissions.",
     inputSchema: { command: z.string().min(1), cwd: z.string().optional(), timeoutSeconds: z.number().int().min(1).max(120).optional().default(30) },
     annotations: { readOnlyHint: false, destructiveHint: true },
     ...common,
@@ -471,14 +600,15 @@ dashboardApp.get("/dashboard/api/status", async (_req, res) => {
     tunnel: await tunnelState(),
     root: accessSettings.allowedRoots[0],
     roots: accessSettings.allowedRoots,
-    terminalEnabled: accessSettings.terminalEnabled,
+    terminalEnabled: terminalEnabled(),
+    terminalMode: accessSettings.terminalMode,
     port: PORT,
     dashboardPort: DASHBOARD_PORT,
     authentication: NO_AUTH ? "Secure MCP Tunnel" : "OAuth 2.1",
     tunnelId,
     uptimeSeconds: Math.floor(process.uptime()),
     toolCount: TOOL_CATALOG.length,
-    version: "2.1.0",
+    version: "2.2.0",
   });
 });
 
@@ -523,7 +653,7 @@ dashboardApp.get("/dashboard/api/file", async (req, res) => {
   }
 });
 
-dashboardApp.get("/dashboard/api/tools", (_req, res) => res.json({ tools: TOOL_CATALOG, terminalEnabled: accessSettings.terminalEnabled }));
+dashboardApp.get("/dashboard/api/tools", (_req, res) => res.json({ tools: TOOL_CATALOG, terminalEnabled: terminalEnabled(), terminalMode: accessSettings.terminalMode }));
 
 dashboardApp.get("/dashboard/api/logs", async (req, res) => {
   const source = req.query.source === "server" ? "server" : "tunnel";
@@ -590,15 +720,26 @@ dashboardApp.delete("/dashboard/api/roots", async (req, res) => {
 });
 
 dashboardApp.post("/dashboard/api/terminal/settings", async (req, res) => {
-  if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "enabled must be true or false" });
-  accessSettings.terminalEnabled = req.body.enabled;
+  const mode = req.body?.mode;
+  if (!["off", "safe", "full"].includes(mode)) return res.status(400).json({ error: "mode must be off, safe, or full" });
+  accessSettings.terminalMode = mode;
   await saveAccessSettings();
-  res.json({ enabled: accessSettings.terminalEnabled });
+  await writeAudit("terminal.mode", { mode });
+  res.json({ enabled: terminalEnabled(), mode });
 });
 
 dashboardApp.post("/dashboard/api/terminal/run", async (req, res) => {
   try {
     const result = await runTerminalCommand(req.body?.command, req.body?.cwd, req.body?.timeoutSeconds);
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+dashboardApp.post("/dashboard/api/project-task", async (req, res) => {
+  try {
+    const result = await runProjectTask(req.body?.task, req.body?.cwd, req.body?.script, req.body?.timeoutSeconds);
     res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -650,8 +791,8 @@ app.post("/mcp", protectMcp, express.json({ limit: "6mb" }), async (req, res) =>
         resultType: "complete",
         supportedVersions: ["2025-03-26", "2024-11-05"],
         capabilities: { tools: { listChanged: false } },
-        _meta: { "io.modelcontextprotocol/serverInfo": { name: "local-coding-files", version: "2.1.0" } },
-        instructions: "Use filesystem tools only inside the configured allowed folders. Terminal commands require the local terminal switch to be enabled.",
+        _meta: { "io.modelcontextprotocol/serverInfo": { name: "local-coding-files", version: "2.2.0" } },
+        instructions: "Work like a careful coding agent: inspect the workspace and Git state before editing, use search_text to locate code, read diffs after edits, and run bounded project tasks to verify changes. Filesystem tools work only inside configured folders. Guarded terminal mode allows only bounded coding tasks; arbitrary PowerShell requires the owner to explicitly enable Full mode in the local dashboard. Never use destructive file or terminal actions without user confirmation.",
         ttlMs: 60000,
         cacheScope: "private",
       },

@@ -17,6 +17,22 @@ $TunnelErr = Join-Path $DataDir 'tunnel.err.log'
 if (-not (Test-Path -LiteralPath $ProfileFile)) { throw 'Run .\configure-secure-tunnel.ps1 -TunnelId tunnel_... first.' }
 if (-not (Test-Path -LiteralPath $KeyFile)) { throw 'The encrypted runtime API key is missing. Run configure-secure-tunnel.ps1 again.' }
 
+# Replace only a prior tunnel client for this same local-files profile. This
+# lets an upgraded server reconnect without touching unrelated tunnel clients.
+$HealthOwner = Get-NetTCPConnection -LocalPort 24124 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($HealthOwner) {
+    $HealthProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($HealthOwner.OwningProcess)" -ErrorAction SilentlyContinue
+    if ($HealthProcess.Name -eq 'tunnel-client.exe' -and $HealthProcess.CommandLine -like '*--profile*local-files*') {
+        Stop-Process -Id $HealthProcess.ProcessId -Force
+        $HealthDeadline = (Get-Date).AddSeconds(5)
+        while ((Get-Date) -lt $HealthDeadline -and (Get-NetTCPConnection -LocalPort 24124 -State Listen -ErrorAction SilentlyContinue)) {
+            Start-Sleep -Milliseconds 100
+        }
+    } else {
+        throw "Port 24124 is already used by PID $($HealthOwner.OwningProcess) ($($HealthProcess.Name)). Refusing to stop an unrelated process."
+    }
+}
+
 $PortOwner = Get-NetTCPConnection -LocalPort 24024 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($PortOwner) {
     $OwnerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($PortOwner.OwningProcess)" -ErrorAction SilentlyContinue
