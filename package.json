@@ -1,17 +1,47 @@
 {
-  "name": "local-chatgpt-filesystem-mcp",
-  "version": "3.0.0",
+  "name": "local-files-desktop",
+  "productName": "Local Files for ChatGPT",
+  "version": "4.0.0",
+  "description": "A private desktop bridge that gives ChatGPT controlled access to folders you choose.",
+  "author": "Vidit Shah",
+  "license": "MIT",
+  "main": ".vite/build/main.cjs",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs",
-    "verify": "node verify-local.mjs && node verify-capabilities.mjs"
+    "start": "electron-forge start",
+    "start:server": "node server.mjs",
+    "build": "vite build --config vite.renderer.config.mjs",
+    "bundle:backend": "vite build --config vite.backend.config.mjs",
+    "prepare:assets": "node scripts/prepare-icons.mjs && node scripts/prepare-tunnel-client.mjs && npm run bundle:backend && npm run build",
+    "package": "npm run prepare:assets && electron-forge package",
+    "make": "npm run prepare:assets && electron-forge make",
+    "verify": "node verify-local.mjs && node verify-capabilities.mjs",
+    "verify:desktop": "node --test desktop/*.test.mjs && vite build --config vite.renderer.config.mjs",
+    "lint:desktop": "node --check desktop/main.mjs && node --check desktop/preload.mjs && node --check desktop/renderer/src/main.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.1",
+    "electron-squirrel-startup": "^1.0.1",
     "express": "5.2.1",
     "express-rate-limit": "8.7.0",
     "minimatch": "10.2.6",
     "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-dmg": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
+    "@electron-forge/plugin-fuses": "^7.11.2",
+    "@electron-forge/plugin-vite": "^7.11.2",
+    "@electron/fuses": "^1.8.0",
+    "electron": "^44.4.5",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.4",
+    "vite": "^8.3.1"
+  },
+  "overrides": {
+    "tar": "7.5.22"
   }
 }

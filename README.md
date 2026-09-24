@@ -1,10 +1,51 @@
 # Local Files MCP for ChatGPT
 
-A private, Windows-first MCP server that lets ChatGPT work with coding folders you explicitly select. It uses an OpenAI Secure MCP Tunnel, so your MCP server stays on your computer—there is no changing public URL and no inbound firewall port.
+A private Windows and macOS desktop app that lets ChatGPT work with coding folders you explicitly select. It uses an OpenAI Secure MCP Tunnel, so your MCP server stays on your computer—there is no changing public URL and no inbound firewall port.
 
-> The repository contains **no credentials**, folder paths, logs, local binaries, or tunnel IDs. Setup stores each machine's runtime API key encrypted with Windows DPAPI and excludes it from Git.
+> The repository contains **no credentials**, folder paths, logs, local binaries, or tunnel IDs. The desktop app encrypts each machine's runtime API key with Windows DPAPI or macOS Keychain and keeps it outside Git.
 
-## Quick start — new PC
+## Desktop app - easiest setup
+
+Local Files now includes a full Electron + Vite desktop application for Windows and macOS. The installer carries its own runtime and a checksum-verified official OpenAI tunnel client, so an end user does not need Node.js, npm, PowerShell, or Terminal.
+
+The five-screen setup asks the user to:
+
+1. Pick the folders ChatGPT may access with the native folder picker.
+2. Create an OpenAI Secure MCP Tunnel and runtime API key using direct links in the app.
+3. Choose Files only, guarded project tasks, or full terminal access.
+4. Click **Save securely & connect**.
+5. Open ChatGPT settings and select the tunnel shown by the app.
+
+Runtime keys are encrypted with Windows DPAPI or macOS Keychain through Electron `safeStorage`. Configuration, encrypted secrets, OAuth state, logs, and downloaded runtime files live in the operating system's per-user application-data folder, not in the repository.
+
+### Run the desktop app from source
+
+```powershell
+npm install
+node scripts/prepare-tunnel-client.mjs
+npm start
+```
+
+### Build an installer
+
+```powershell
+npm run make
+```
+
+Windows produces a no-admin Squirrel `Setup.exe`. macOS produces a DMG and ZIP. Installer builds must run on their target operating system; the included GitHub Actions workflow builds both whenever a `v*` tag is pushed or the workflow is started manually. Production distribution should add platform code-signing and Apple notarization credentials to avoid operating-system trust warnings.
+
+Desktop-only checks can be run with:
+
+```powershell
+npm run lint:desktop
+npm run verify:desktop
+```
+
+## Command-line setup - developers and servers
+
+The commands below remain available for developers and headless machines. Most users should use the desktop app above.
+
+### Legacy browser wizard
 
 Requirements: Windows 10/11, Node.js 20+, Git, an OpenAI Platform account with a tunnel and a runtime API key.
 

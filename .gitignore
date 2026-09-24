@@ -1,4 +1,11 @@
 node_modules/
+.vite/
+out/
+vendor/
+dist-backend/
+desktop/renderer/dist/
+assets/generated/
+.desktop-backend-test/
 
 # Local configuration and credentials — never commit these.
 .env
@@ -7,6 +14,8 @@ node_modules/
 .current-tunnel-url
 openai-tunnel.env
 access-config.json
+desktop-config.json
+desktop-secrets.json
 tunnel-client-data/
 
 # Runtime binaries are downloaded and checksum-verified by setup.

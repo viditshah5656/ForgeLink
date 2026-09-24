@@ -9,6 +9,8 @@ $ForbiddenTracked = @(
     '.oauth-tokens.json',
     '.current-tunnel-url',
     'access-config.json',
+    'desktop-config.json',
+    'desktop-secrets.json',
     'openai-tunnel.env',
     'cloudflare-tunnel-token.dpapi',
     'cloudflare-named.json'
@@ -20,7 +22,7 @@ foreach ($Name in $ForbiddenTracked) {
     if ($Tracked -contains $Name) { $Failures.Add("Secret-bearing local file is tracked: $Name") }
 }
 foreach ($Path in $Tracked) {
-    if ($Path -match '^(bin|tunnel-client-data)/' -or $Path -match '\.(log|zip|png)$') { $Failures.Add("Generated or downloaded artifact is tracked: $Path") }
+    if ($Path -match '^(bin|tunnel-client-data|vendor|out|dist-backend)/' -or $Path -match '\.(log|zip|png)$') { $Failures.Add("Generated or downloaded artifact is tracked: $Path") }
 }
 
 $Patterns = @(

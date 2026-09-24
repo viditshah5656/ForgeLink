@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
@@ -15,15 +16,19 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { InvalidGrantError, InvalidRequestError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const DASHBOARD_DIR = path.join(here, "web");
-const ACCESS_CONFIG_FILE = path.join(here, "access-config.json");
-const AUDIT_LOG_FILE = path.join(here, "agent-audit.jsonl");
+const dataDir = process.env.MCP_DATA_DIR ? path.resolve(process.env.MCP_DATA_DIR) : here;
+await fsp.mkdir(dataDir, { recursive: true });
+const DASHBOARD_DIR = process.env.MCP_ASSET_DIR ? path.join(path.resolve(process.env.MCP_ASSET_DIR), "web") : path.join(here, "web");
+const ACCESS_CONFIG_FILE = path.join(dataDir, "access-config.json");
+const AUDIT_LOG_FILE = path.join(dataDir, "agent-audit.jsonl");
 const MAX_SEARCH_FILE_SIZE = 1024 * 1024;
+const IS_WINDOWS = process.platform === "win32";
+const GIT_COMMAND = IS_WINDOWS ? "git.exe" : "git";
 const ADVANCED_TOOLS = process.env.ADVANCED_TOOLS !== "0";
 const ADVANCED_TOOL_NAMES = new Set(["inspect_workspace", "search_text", "get_git_status", "get_git_diff", "get_git_log", "get_git_show", "get_git_branches", "git_stage", "git_unstage", "git_commit", "run_project_task"]);
 
 async function loadEnv() {
-  const envFile = path.join(here, ".env");
+  const envFile = path.join(dataDir, ".env");
   const contents = await fsp.readFile(envFile, "utf8");
   for (const rawLine of contents.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -40,7 +45,7 @@ await loadEnv();
 
 const PORT = Number(process.env.PORT || "24024");
 const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT || "24025");
-const ROOT_INPUT = process.env.ALLOWED_ROOT || "C:\\Coding";
+const ROOT_INPUT = process.env.ALLOWED_ROOT || (IS_WINDOWS ? "C:\\Coding" : process.cwd());
 const LOGIN_PASSWORD = process.env.OAUTH_LOGIN_PASSWORD;
 const NO_AUTH = process.argv.includes("--no-auth") || process.env.NO_AUTH === "1";
 const publicUrlArg = process.argv.find((arg) => arg.startsWith("--public-url="));
@@ -69,7 +74,7 @@ async function validateRoot(input) {
   return root;
 }
 
-let defaultRoot = "C:\\Coding";
+let defaultRoot = ROOT_INPUT;
 try {
   defaultRoot = await validateRoot(ROOT_INPUT);
 } catch (e) {
@@ -119,6 +124,7 @@ function insideRoot(candidate) {
 }
 
 function checkWindowsPathSecurity(filePath) {
+  if (!IS_WINDOWS) return;
   const parts = filePath.split(/[\\/]/);
   for (const part of parts) {
     if (!part) continue;
@@ -146,23 +152,20 @@ function normalizeInputPath(input, baseRoot = accessSettings.allowedRoots[0]) {
     try { p = fileURLToPath(p); } catch {}
   }
 
-  // Handle POSIX Windows format: /C:/... or /c:/... -> C:/...
-  p = p.replace(/^\/([a-zA-Z]:[\\/].*)/, "$1");
+  if (IS_WINDOWS) {
+    // Handle POSIX Windows format: /C:/... or /c:/... -> C:/...
+    p = p.replace(/^\/([a-zA-Z]:[\\/].*)/, "$1");
 
-  // Handle verbatim device UNC: \\?\C:\ -> C:\
-  if (/^\\\\\?\\([a-zA-Z]:[\\/].*)/.test(p)) {
-    p = p.replace(/^\\\\\?\\/, "");
-  }
+    // Handle verbatim device UNC: \\?\C:\ -> C:\
+    if (/^\\\\\?\\([a-zA-Z]:[\\/].*)/.test(p)) p = p.replace(/^\\\\\?\\/, "");
 
-  // Handle root-relative / or /file or \file (ChatGPT workspace root semantics)
-  if (/^[\\/](?![\\/]|[a-zA-Z]:)/.test(p)) {
-    p = p.replace(/^[\\/]+/, "");
-    return path.resolve(baseRoot, p);
-  }
+    // Handle root-relative / or /file or \file (ChatGPT workspace root semantics)
+    if (/^[\\/](?![\\/]|[a-zA-Z]:)/.test(p)) {
+      p = p.replace(/^[\\/]+/, "");
+      return path.resolve(baseRoot, p);
+    }
 
-  // Reject drive-relative without slash: C:file.txt
-  if (/^[a-zA-Z]:(?![\\/])/.test(p)) {
-    throw new Error("Drive-relative paths without slash are not supported");
+    if (/^[a-zA-Z]:(?![\\/])/.test(p)) throw new Error("Drive-relative paths without slash are not supported");
   }
 
   if (path.isAbsolute(p)) {
@@ -267,8 +270,8 @@ class PersistentTokensStore {
 
 class LocalOAuthProvider {
   constructor() {
-    this.clientsStore = new PersistentClientsStore(path.join(here, ".oauth-clients.json"));
-    this.tokensStore = new PersistentTokensStore(path.join(here, ".oauth-tokens.json"));
+    this.clientsStore = new PersistentClientsStore(path.join(dataDir, ".oauth-clients.json"));
+    this.tokensStore = new PersistentTokensStore(path.join(dataDir, ".oauth-tokens.json"));
     this.pending = new Map();
     this.codes = new Map();
     this.accessTokens = this.tokensStore.accessTokens;
@@ -450,7 +453,10 @@ async function runProcess(program, args, cwd, timeoutSeconds = 30) {
 async function runTerminalCommand(command, cwd, timeoutSeconds = 30) {
   if (accessSettings.terminalMode !== "full") throw new Error("Full terminal access is disabled. Enable Full mode from the local dashboard first.");
   if (typeof command !== "string" || !command.trim()) throw new Error("A command is required");
-  const result = await runProcess("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], cwd, timeoutSeconds);
+  const shell = IS_WINDOWS
+    ? ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]]
+    : ["/bin/zsh", ["-lc", command]];
+  const result = await runProcess(shell[0], shell[1], cwd, timeoutSeconds);
   await writeAudit("terminal.full", { cwd: result.cwd, commandSha256: crypto.createHash("sha256").update(command).digest("hex"), exitCode: result.exitCode });
   return { cwd: result.cwd, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
@@ -459,22 +465,22 @@ async function runProjectTask(task, cwd, script, timeoutSeconds = 120) {
   if (!terminalEnabled()) throw new Error("Project commands are disabled. Enable Guarded or Full terminal mode from the local dashboard.");
   const safeScript = typeof script === "string" && /^[A-Za-z0-9:_-]+$/.test(script) ? script : null;
   const tasks = {
-    "git-status": ["git.exe", ["status", "--short", "--branch"]],
-    "git-diff": ["git.exe", ["--no-pager", "diff", "--stat"]],
-    "npm-test": ["npm.cmd", ["test"]],
-    "npm-run": safeScript ? ["npm.cmd", ["run", safeScript]] : null,
-    "npm-build": ["npm.cmd", ["run", "build"]],
-    "npm-lint": ["npm.cmd", ["run", "lint"]],
-    "npm-typecheck": ["npm.cmd", ["run", "typecheck"]],
-    "node-test": ["node.exe", ["--test"]],
-    "python-pytest": ["python.exe", ["-m", "pytest"]],
-    "python-unittest": ["python.exe", ["-m", "unittest", "discover"]],
-    "python-compile": ["python.exe", ["-m", "compileall", "."]],
-    "cargo-check": ["cargo.exe", ["check"]],
-    "cargo-test": ["cargo.exe", ["test"]],
-    "go-test": ["go.exe", ["test", "./..."]],
-    "dotnet-build": ["dotnet.exe", ["build", "--no-restore"]],
-    "dotnet-test": ["dotnet.exe", ["test", "--no-restore"]],
+    "git-status": [GIT_COMMAND, ["status", "--short", "--branch"]],
+    "git-diff": [GIT_COMMAND, ["--no-pager", "diff", "--stat"]],
+    "npm-test": [IS_WINDOWS ? "npm.cmd" : "npm", ["test"]],
+    "npm-run": safeScript ? [IS_WINDOWS ? "npm.cmd" : "npm", ["run", safeScript]] : null,
+    "npm-build": [IS_WINDOWS ? "npm.cmd" : "npm", ["run", "build"]],
+    "npm-lint": [IS_WINDOWS ? "npm.cmd" : "npm", ["run", "lint"]],
+    "npm-typecheck": [IS_WINDOWS ? "npm.cmd" : "npm", ["run", "typecheck"]],
+    "node-test": [IS_WINDOWS ? "node.exe" : "node", ["--test"]],
+    "python-pytest": [IS_WINDOWS ? "python.exe" : "python3", ["-m", "pytest"]],
+    "python-unittest": [IS_WINDOWS ? "python.exe" : "python3", ["-m", "unittest", "discover"]],
+    "python-compile": [IS_WINDOWS ? "python.exe" : "python3", ["-m", "compileall", "."]],
+    "cargo-check": [IS_WINDOWS ? "cargo.exe" : "cargo", ["check"]],
+    "cargo-test": [IS_WINDOWS ? "cargo.exe" : "cargo", ["test"]],
+    "go-test": [IS_WINDOWS ? "go.exe" : "go", ["test", "./..."]],
+    "dotnet-build": [IS_WINDOWS ? "dotnet.exe" : "dotnet", ["build", "--no-restore"]],
+    "dotnet-test": [IS_WINDOWS ? "dotnet.exe" : "dotnet", ["test", "--no-restore"]],
   };
   const selected = tasks[task];
   if (!selected) throw new Error("Unsupported project task. Use one of the documented task identifiers.");
@@ -520,7 +526,7 @@ async function inspectWorkspace(directory) {
   } catch {}
   let git = null;
   try {
-    const result = await runProcess("git.exe", ["status", "--short", "--branch"], target, 20);
+    const result = await runProcess(GIT_COMMAND, ["status", "--short", "--branch"], target, 20);
     git = { available: true, status: result.stdout.trim(), exitCode: result.exitCode };
   } catch { git = { available: false }; }
   return { workspace: target, markers: present, package: packageInfo, git };
@@ -554,7 +560,7 @@ async function searchText(directory, query, options = {}) {
 async function gitWorkspace(input) {
   const target = await confinedPath(input);
   if (!(await fsp.stat(target)).isDirectory()) throw new Error("Git path must be a folder");
-  const check = await runProcess("git.exe", ["rev-parse", "--show-toplevel"], target, 20);
+  const check = await runProcess(GIT_COMMAND, ["rev-parse", "--show-toplevel"], target, 20);
   if (check.exitCode !== 0) throw new Error(check.stderr.trim() || "The selected folder is not inside a Git repository");
   return await confinedPath(check.stdout.trim());
 }
@@ -697,7 +703,7 @@ function createFilesystemServer() {
   });
 
   server.registerTool("get_git_status", { description: "Read the current Git branch and working-tree status in an allowed project folder. Does not modify Git state.", inputSchema: { path: z.string() }, annotations: { readOnlyHint: true }, ...common }, async ({ path: input }) => {
-    const result = await runProcess("git.exe", ["status", "--short", "--branch"], input, 30);
+    const result = await runProcess(GIT_COMMAND, ["status", "--short", "--branch"], input, 30);
     return textResult(JSON.stringify(result, null, 2));
   });
 
@@ -714,14 +720,14 @@ function createFilesystemServer() {
       if (staged) args.push("--cached");
       args.push("--", relativeFile);
     }
-    const result = await runProcess("git.exe", args, target, 30);
+    const result = await runProcess(GIT_COMMAND, args, target, 30);
     const bounded = `${result.stdout}${result.stderr}`.slice(0, 256 * 1024);
     return textResult(JSON.stringify({ ...result, stdout: bounded, stderr: "", truncated: bounded.length < result.stdout.length + result.stderr.length }, null, 2));
   });
 
   server.registerTool("get_git_log", { description: "Read recent commit history for an allowed Git workspace, including compact commit identifiers, authors, dates, and subjects.", inputSchema: { path: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, ...common }, async ({ path: input, limit }) => {
     const workspace = await gitWorkspace(input);
-    const result = await runProcess("git.exe", ["--no-pager", "log", `-${limit}`, "--date=iso-strict", "--pretty=format:%h%x09%ad%x09%an%x09%s"], workspace, 30);
+    const result = await runProcess(GIT_COMMAND, ["--no-pager", "log", `-${limit}`, "--date=iso-strict", "--pretty=format:%h%x09%ad%x09%an%x09%s"], workspace, 30);
     return textResult(JSON.stringify(result, null, 2));
   });
 
@@ -729,14 +735,14 @@ function createFilesystemServer() {
     const workspace = await gitWorkspace(input);
     const args = ["--no-pager", "show", "--no-ext-diff", "--decorate", ref];
     if (file) args.push("--", ...(await gitRelativePaths(workspace, [file])));
-    const result = await runProcess("git.exe", args, workspace, 60);
+    const result = await runProcess(GIT_COMMAND, args, workspace, 60);
     const combined = `${result.stdout}${result.stderr}`;
     return textResult(JSON.stringify({ ...result, stdout: combined.slice(0, maxChars), stderr: "", truncated: combined.length > maxChars }, null, 2));
   });
 
   server.registerTool("get_git_branches", { description: "List local and remote branches and their current commit without changing the repository.", inputSchema: { path: z.string() }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, ...common }, async ({ path: input }) => {
     const workspace = await gitWorkspace(input);
-    return textResult(JSON.stringify(await runProcess("git.exe", ["--no-pager", "branch", "--all", "--verbose", "--no-abbrev"], workspace, 30), null, 2));
+    return textResult(JSON.stringify(await runProcess(GIT_COMMAND, ["--no-pager", "branch", "--all", "--verbose", "--no-abbrev"], workspace, 30), null, 2));
   });
 
   const handleWriteFile = async ({ path: input, content }) => {
@@ -812,7 +818,7 @@ function createFilesystemServer() {
     return textResult(`Moved ${from} to ${to}`);
   });
 
-  server.registerTool("delete_file", { description: "Delete one file under C:\\Coding. Directories cannot be deleted.", inputSchema: { path: z.string() }, annotations: { readOnlyHint: false, destructiveHint: true }, ...common }, async ({ path: input }) => {
+  server.registerTool("delete_file", { description: "Delete one file inside an allowed folder. Directories cannot be deleted.", inputSchema: { path: z.string() }, annotations: { readOnlyHint: false, destructiveHint: true }, ...common }, async ({ path: input }) => {
     const target = await confinedPath(input);
     const stat = await fsp.stat(target);
     if (!stat.isFile()) throw new Error("Only files can be deleted");
@@ -833,7 +839,7 @@ function createFilesystemServer() {
   server.registerTool("git_stage", { description: "Stage selected paths in a local Git repository. Use get_git_status and get_git_diff before staging.", inputSchema: { path: z.string(), paths: z.array(z.string()).min(1).max(100) }, annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false }, ...common }, async ({ path: input, paths }) => {
     const workspace = await gitWorkspace(input);
     const relative = await gitRelativePaths(workspace, paths);
-    const result = await runProcess("git.exe", ["add", "--", ...relative], workspace, 60);
+    const result = await runProcess(GIT_COMMAND, ["add", "--", ...relative], workspace, 60);
     await writeAudit("git.stage", { cwd: workspace, paths: relative.length, exitCode: result.exitCode });
     return textResult(JSON.stringify(result, null, 2));
   });
@@ -841,14 +847,14 @@ function createFilesystemServer() {
   server.registerTool("git_unstage", { description: "Remove selected paths from the Git index while preserving working-tree changes.", inputSchema: { path: z.string(), paths: z.array(z.string()).min(1).max(100) }, annotations: { readOnlyHint: false, idempotentHint: true, destructiveHint: false, openWorldHint: false }, ...common }, async ({ path: input, paths }) => {
     const workspace = await gitWorkspace(input);
     const relative = await gitRelativePaths(workspace, paths);
-    const result = await runProcess("git.exe", ["restore", "--staged", "--", ...relative], workspace, 60);
+    const result = await runProcess(GIT_COMMAND, ["restore", "--staged", "--", ...relative], workspace, 60);
     await writeAudit("git.unstage", { cwd: workspace, paths: relative.length, exitCode: result.exitCode });
     return textResult(JSON.stringify(result, null, 2));
   });
 
   server.registerTool("git_commit", { description: "Create a local Git commit from already staged changes. This does not push or contact a remote repository.", inputSchema: { path: z.string(), message: z.string().min(1).max(500) }, annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: false, openWorldHint: false }, ...common }, async ({ path: input, message }) => {
     const workspace = await gitWorkspace(input);
-    const result = await runProcess("git.exe", ["commit", "-m", message], workspace, 120);
+    const result = await runProcess(GIT_COMMAND, ["commit", "-m", message], workspace, 120);
     await writeAudit("git.commit", { cwd: workspace, messageSha256: crypto.createHash("sha256").update(message).digest("hex"), exitCode: result.exitCode });
     return textResult(JSON.stringify(result, null, 2));
   });
@@ -864,7 +870,7 @@ function createFilesystemServer() {
   });
 
   server.registerTool("run_terminal_command", {
-    description: "Run an arbitrary PowerShell command on the user's Windows PC. This works only when the owner explicitly enables Full terminal mode in the local dashboard. The starting directory must be inside an allowed folder, but Full mode can access other resources with the user's Windows permissions.",
+    description: "Run an arbitrary PowerShell command on Windows or zsh command on macOS. This works only when the owner explicitly enables Full terminal mode in the local dashboard. The starting directory must be inside an allowed folder, but Full mode can access other resources with the user's account permissions.",
     inputSchema: { command: z.string().min(1), cwd: z.string().optional(), timeoutSeconds: z.number().int().min(1).max(600).optional().default(30) },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     ...common,
@@ -918,7 +924,7 @@ dashboardApp.get("/", (_req, res) => res.redirect("/dashboard/"));
 dashboardApp.use("/dashboard", express.static(DASHBOARD_DIR, { index: "index.html", dotfiles: "deny", fallthrough: true }));
 
 dashboardApp.get("/dashboard/api/status", async (_req, res) => {
-  const profilePath = path.join(here, "tunnel-client-data", "profiles", "local-files.yaml");
+  const profilePath = path.join(dataDir, "tunnel-client-data", "profiles", "local-files.yaml");
   let tunnelId = "Not configured";
   try {
     const profile = await fsp.readFile(profilePath, "utf8");
@@ -986,7 +992,7 @@ dashboardApp.get("/dashboard/api/tools", (_req, res) => res.json({ tools: TOOL_C
 
 dashboardApp.get("/dashboard/api/logs", async (req, res) => {
   const source = req.query.source === "server" ? "server" : "tunnel";
-  const filename = path.join(here, "tunnel-client-data", source === "server" ? "server.log" : "tunnel.log");
+  const filename = path.join(dataDir, "tunnel-client-data", source === "server" ? "server.log" : "tunnel.log");
   try {
     const raw = await fsp.readFile(filename, "utf8");
     res.json({ source, lines: redactLogs(raw).split(/\r?\n/).filter(Boolean).slice(-250) });
@@ -999,6 +1005,11 @@ dashboardApp.get("/dashboard/api/logs", async (req, res) => {
 dashboardApp.get("/dashboard/api/folder-picker", async (req, res) => {
   try {
     if (typeof req.query.path !== "string" || !req.query.path.trim()) {
+      if (!IS_WINDOWS) {
+        const candidates = [os.homedir(), ...accessSettings.allowedRoots];
+        const unique = [...new Set(candidates)];
+        return res.json({ path: null, parent: null, directories: unique.map((folder) => ({ name: folder === os.homedir() ? "Home" : path.basename(folder), path: folder, kind: "folder" })) });
+      }
       const driveChecks = await Promise.all("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(async (letter) => {
         const drive = `${letter}:\\`;
         try { return (await fsp.stat(drive)).isDirectory() ? drive : null; } catch { return null; }
