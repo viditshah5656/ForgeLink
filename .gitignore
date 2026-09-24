@@ -1,0 +1,27 @@
+node_modules/
+
+# Local configuration and credentials — never commit these.
+.env
+.oauth-clients.json
+.current-tunnel-url
+openai-tunnel.env
+access-config.json
+tunnel-client-data/
+
+# Runtime binaries are downloaded and checksum-verified by setup.
+bin/
+
+# Local logs and test captures.
+*.log
+*.err.log
+dashboard-test*.png
+files-test.png
+mobile-test*.png
+security-test.png
+terminal-test.png
+setup-wizard-test.png
+
+# Editor and OS state.
+.DS_Store
+Thumbs.db
+.vscode/

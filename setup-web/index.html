@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Private Local Files MCP setup wizard">
+  <title>Set up Local Files MCP</title>
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+  <main class="shell">
+    <aside class="side">
+      <a class="brand" href="#"><span class="brand-mark">≡</span><span><strong>Local Files</strong><small>MCP for ChatGPT</small></span></a>
+      <div class="steps" id="steps">
+        <div class="step active" data-step="1"><b>1</b><span><strong>Welcome</strong><small>What you need</small></span></div>
+        <div class="step" data-step="2"><b>2</b><span><strong>Secure tunnel</strong><small>ID and runtime key</small></span></div>
+        <div class="step" data-step="3"><b>3</b><span><strong>Folders</strong><small>Choose local access</small></span></div>
+        <div class="step" data-step="4"><b>4</b><span><strong>Finish</strong><small>Start and connect</small></span></div>
+      </div>
+      <div class="private-note"><span class="lock">⌁</span><span><strong>Private by default</strong><small>Keys stay encrypted on this PC.</small></span></div>
+    </aside>
+    <section class="content">
+      <header><span id="headerStatus">Local setup</span><span class="local"><i></i> localhost only</span></header>
+      <div class="panel" id="panel">
+        <section class="screen active" data-screen="1">
+          <span class="eyebrow">Welcome</span>
+          <h1>Bring ChatGPT<br>to your code.</h1>
+          <p class="lede">This private setup connects ChatGPT to folders you choose on this PC through an OpenAI Secure MCP Tunnel. Nothing is exposed publicly.</p>
+          <div class="requirements" id="requirements">
+            <article><span class="check" data-requirement="windows">•</span><div><strong>Windows 10 or 11</strong><small>This installer runs locally on Windows.</small></div></article>
+            <article><span class="check" data-requirement="node">•</span><div><strong>Node.js 20+</strong><small>Used for the local MCP server.</small></div></article>
+            <article><span class="check" data-requirement="client">•</span><div><strong>Official tunnel client</strong><small>Downloaded and checksum-verified when needed.</small></div></article>
+          </div>
+          <div class="callout"><span>ⓘ</span><p>You will need an OpenAI <strong>tunnel ID</strong> and a <strong>runtime API key</strong> with <em>Tunnels Read + Use</em>. The wizard links to the exact pages.</p></div>
+          <div class="actions"><button class="button" data-next>Continue</button></div>
+        </section>
+
+        <section class="screen" data-screen="2">
+          <span class="eyebrow">Secure tunnel</span>
+          <h1>Connect your<br>private bridge.</h1>
+          <p class="lede">Create a tunnel in OpenAI Platform, then paste its ID and a runtime API key below. The key is encrypted using your Windows account and is never shown again.</p>
+          <div class="link-cards">
+            <a href="https://platform.openai.com/settings/organization/tunnels" target="_blank" rel="noreferrer"><span>①</span><div><strong>Create or find a tunnel</strong><small>Platform → Organization → Tunnels</small></div><b>↗</b></a>
+            <a href="https://platform.openai.com/settings/organization/api-keys" target="_blank" rel="noreferrer"><span>②</span><div><strong>Create a runtime API key</strong><small>Give it Tunnels Read + Use access</small></div><b>↗</b></a>
+          </div>
+          <label class="field"><span>Tunnel ID</span><input id="tunnelId" autocomplete="off" spellcheck="false" placeholder="tunnel_0123456789abcdef"><small>Your tunnel ID is safe to store locally; it is excluded from Git.</small></label>
+          <label class="field"><span>Runtime API key</span><div class="secret-input"><input id="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…"><button type="button" id="revealKey" aria-label="Show key">Show</button></div><small>This is processed only by the local wizard, encrypted with Windows DPAPI, then discarded from browser memory.</small></label>
+          <div class="actions"><button class="button secondary" data-back>Back</button><button class="button" data-next>Continue</button></div>
+        </section>
+
+        <section class="screen" data-screen="3">
+          <span class="eyebrow">Folders</span>
+          <h1>Choose what<br>ChatGPT can use.</h1>
+          <p class="lede">Only these folders will be available through file tools. You can add or remove folders later from the local dashboard.</p>
+          <div class="folder-picker">
+            <div class="folder-toolbar"><button id="drivesButton" class="button secondary" type="button">This PC</button><button id="upButton" class="button secondary" type="button" disabled>Up</button><code id="folderPath">This PC</code></div>
+            <div class="folder-list" id="folderList"><div class="loader"></div></div>
+            <div class="folder-selection"><span><strong id="selectedFolderLabel">No folder selected</strong><small id="selectedFolderDetail">Open a drive and select a folder.</small></span><button id="addFolderButton" class="button" type="button" disabled>Add selected folder</button></div>
+          </div>
+          <div class="selected-box"><div class="selected-head"><strong>Allowed folders</strong><span id="folderCount">0 folders</span></div><div id="selectedFolders" class="selected-folders"><p>Choose at least one folder above.</p></div></div>
+          <label class="terminal-option"><input type="checkbox" id="terminalEnabled"><span class="switch"><i></i></span><span><strong>Enable ChatGPT terminal access</strong><small>Optional. PowerShell commands are powerful and can operate beyond the folder list.</small></span></label>
+          <div class="actions"><button class="button secondary" data-back>Back</button><button class="button" data-next>Continue</button></div>
+        </section>
+
+        <section class="screen" data-screen="4">
+          <span class="eyebrow">Finish</span>
+          <h1>Ready to<br>go private.</h1>
+          <p class="lede">Review the plan, save securely, then the wizard will start your local MCP server and secure tunnel.</p>
+          <div class="review-card"><div><span>Secure tunnel</span><strong id="reviewTunnel">Not set</strong></div><div><span>Allowed folders</span><strong id="reviewFolders">0 selected</strong></div><div><span>Terminal access</span><strong id="reviewTerminal">Off</strong></div></div>
+          <div class="security-list"><p>✓ Runtime key is encrypted with Windows DPAPI.</p><p>✓ Credentials, folders, logs, and downloaded binaries are ignored by Git.</p><p>✓ The MCP and dashboard bind only to localhost.</p></div>
+          <div class="progress-wrap" id="progressWrap" hidden><div class="progress"><i></i></div><strong id="progressText">Preparing secure setup…</strong></div>
+          <div class="error" id="setupError" hidden></div>
+          <div class="actions"><button class="button secondary" data-back id="finishBack">Back</button><button class="button" id="configureButton">Secure setup & start</button></div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <div class="toast" id="toast"></div>
+  <script src="setup.js"></script>
+</body>
+</html>
