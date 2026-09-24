@@ -3,6 +3,7 @@ node_modules/
 # Local configuration and credentials — never commit these.
 .env
 .oauth-clients.json
+.oauth-tokens.json
 .current-tunnel-url
 openai-tunnel.env
 access-config.json
@@ -21,6 +22,8 @@ security-test.png
 terminal-test.png
 setup-wizard-test.png
 agent-audit.jsonl
+cloudflare-tunnel-token.dpapi
+cloudflare-named.json
 
 # Editor and OS state.
 .DS_Store

@@ -38,6 +38,31 @@ With `start-mcp.ps1` running:
 
 Secure MCP Tunnel is an outbound-only bridge; it needs a tunnel ID, a runtime API key, and local access to the MCP server. See the [official Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
 
+## Permanent public URL (Cloudflare Named Tunnel)
+
+`trycloudflare.com` quick tunnels are intentionally temporary: their URL changes at restart. For a fixed URL that works with ChatGPT's **Server URL** connection mode, use a Cloudflare **Named Tunnel** and a hostname in a domain you control.
+
+1. In Cloudflare Zero Trust, create a remotely managed tunnel.
+2. Add a public hostname such as `mcp.example.com`, routed to `http://127.0.0.1:24024`.
+3. Copy the tunnel token from the tunnel's connector installation command (the long value after `--token`).
+4. On the local PC, start it without placing the token in shell history:
+
+```powershell
+cd local-files-mcp
+$token = Read-Host 'Paste Cloudflare tunnel token' -AsSecureString
+$ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($token)
+try {
+  $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+  .\start-cloudflare-named-tunnel.ps1 -Hostname mcp.example.com -TunnelToken $plain
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+}
+```
+
+In ChatGPT create a plugin with **Server URL** `https://mcp.example.com/mcp` and **OAuth** authentication. The runner starts the local MCP with that HTTPS origin, so OAuth discovery, issuer, and callback URLs match the fixed hostname.
+
+The hostname remains fixed across restarts and clones. Each PC needs its own running connector and may use its own Cloudflare tunnel/token; never commit or share a token. Cloudflare documents that a remotely managed tunnel is run with its tunnel token, so treat that token like a password. [Cloudflare tunnel token documentation](https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/)
+
 ## Daily use
 
 ```powershell
@@ -55,6 +80,8 @@ When you enable the Local Files plugin in a ChatGPT chat, it now supports a disc
 3. File tools make only the requested edit inside folders you allowed.
 4. `get_git_diff` checks the actual change afterward.
 5. `run_project_task` runs a bounded Git, Node, npm, Python, or .NET verification command.
+
+Version 3 adds Codex-style local workspace primitives: ranged reads, image inspection, binary writes, guarded exact edits, appends, checksums, safe file/folder copies, explicit recursive deletion, Git history/branch inspection, staging, unstaging, local commits, and longer build/test runs for Node, Python, Rust, Go, and .NET projects. Full PowerShell remains available only when **Full** mode is enabled locally.
 
 Use a prompt such as: “Inspect this project, explain your plan, make the smallest safe change, then show the Git diff and run the relevant test.”
 

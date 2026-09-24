@@ -50,6 +50,37 @@ async function mcp(id, method, params = {}) {
 
 const initialized = await mcp(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "local-verifier", version: "1.0.0" } });
 result.mcpInitialize = { status: initialized.response.status, server: initialized.body?.result?.serverInfo?.name };
+const discovery = await mcp(5, "server/discover");
+const supportedVersions = discovery.body?.result?.supportedVersions;
+const listChanged = discovery.body?.result?.capabilities?.tools?.listChanged;
+if (discovery.response.status !== 200 || !supportedVersions?.includes("2026-07-28") || listChanged !== true) {
+  throw new Error(`Connector discovery contract mismatch: ${JSON.stringify(discovery.body)}`);
+}
+result.connectorDiscovery = { status: discovery.response.status, supportedVersions, listChanged };
+
+const modernMeta = {
+  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+  "io.modelcontextprotocol/clientInfo": { name: "local-modern-verifier", version: "1.0.0" },
+  "io.modelcontextprotocol/clientCapabilities": {},
+};
+const modernTools = await json(`${base}/mcp`, {
+  method: "POST",
+  headers: { authorization: `Bearer ${tokens.body.access_token}`, accept: "application/json, text/event-stream", "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list" },
+  body: JSON.stringify({ jsonrpc: "2.0", id: "modern-tools-list", method: "tools/list", params: { _meta: modernMeta } }),
+});
+if (modernTools.response.status !== 200 || modernTools.body?.result?.resultType !== "complete" || !Array.isArray(modernTools.body?.result?.tools)) {
+  throw new Error(`Modern tools/list compatibility failed: ${JSON.stringify(modernTools.body)}`);
+}
+result.modernToolsList = { status: modernTools.response.status, resultType: modernTools.body.result.resultType, count: modernTools.body.result.tools.length };
+const modernCall = await json(`${base}/mcp`, {
+  method: "POST",
+  headers: { authorization: `Bearer ${tokens.body.access_token}`, accept: "application/json, text/event-stream", "content-type": "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "list_allowed_directories" },
+  body: JSON.stringify({ jsonrpc: "2.0", id: "modern-tools-call", method: "tools/call", params: { name: "list_allowed_directories", arguments: {}, _meta: modernMeta } }),
+});
+if (modernCall.response.status !== 200 || modernCall.body?.result?.resultType !== "complete" || modernCall.body?.result?.isError === true) {
+  throw new Error(`Modern tools/call compatibility failed: ${JSON.stringify(modernCall.body)}`);
+}
+result.modernToolsCall = { status: modernCall.response.status, resultType: modernCall.body.result.resultType };
 const tools = await mcp(2, "tools/list");
 result.tools = { status: tools.response.status, count: tools.body?.result?.tools?.length, names: tools.body?.result?.tools?.map((tool) => tool.name) };
 const allowed = await mcp(3, "tools/call", { name: "list_allowed_directories", arguments: {} });
@@ -59,4 +90,5 @@ result.outsideRootDenied = denied.body?.result?.isError === true && JSON.stringi
 
 const unauthenticated = await fetch(`${base}/mcp`, { headers: { accept: "application/json, text/event-stream" } });
 result.unauthenticatedMcp = { status: unauthenticated.status, challenge: unauthenticated.headers.get("www-authenticate") };
+await unauthenticated.body?.cancel();
 console.log(JSON.stringify(result, null, 2));

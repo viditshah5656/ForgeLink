@@ -1,9 +1,10 @@
 [CmdletBinding()]
 param(
-    [switch]$LocalOnly
+    [switch]$LocalOnly,
+    [switch]$QuickPublic
 )
 
-if (-not $LocalOnly) {
+if (-not $LocalOnly -and -not $QuickPublic) {
     $StableLauncher = Join-Path $PSScriptRoot 'start-secure-tunnel.ps1'
     $StableProfile = Join-Path $PSScriptRoot 'tunnel-client-data\profiles\local-files.yaml'
     $StableKey = Join-Path $PSScriptRoot 'tunnel-client-data\api-key.dpapi'

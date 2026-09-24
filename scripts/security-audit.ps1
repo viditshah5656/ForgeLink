@@ -3,7 +3,16 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $Project = Split-Path -Parent $PSScriptRoot
-$ForbiddenTracked = @('.env', 'access-config.json', '.oauth-clients.json', 'openai-tunnel.env')
+$ForbiddenTracked = @(
+    '.env',
+    '.oauth-clients.json',
+    '.oauth-tokens.json',
+    '.current-tunnel-url',
+    'access-config.json',
+    'openai-tunnel.env',
+    'cloudflare-tunnel-token.dpapi',
+    'cloudflare-named.json'
+)
 $Tracked = @(git -C $Project ls-files)
 $Failures = [System.Collections.Generic.List[string]]::new()
 
