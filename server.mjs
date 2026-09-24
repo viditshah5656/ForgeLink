@@ -421,7 +421,7 @@ async function searchText(directory, query, options = {}) {
 }
 
 function createFilesystemServer() {
-  const server = new McpServer({ name: "local-coding-files", version: "2.2.0" });
+  const server = new McpServer({ name: "local-coding-files", version: "2.2.1" });
   const common = { _meta: oauthMeta() };
 
   server.registerTool("list_allowed_directories", { description: "Show all filesystem roots available to this server.", inputSchema: {}, annotations: { readOnlyHint: true }, ...common }, async () => textResult(accessSettings.allowedRoots.join("\n")));
@@ -608,7 +608,7 @@ dashboardApp.get("/dashboard/api/status", async (_req, res) => {
     tunnelId,
     uptimeSeconds: Math.floor(process.uptime()),
     toolCount: TOOL_CATALOG.length,
-    version: "2.2.0",
+    version: "2.2.1",
   });
 });
 
@@ -789,9 +789,9 @@ app.post("/mcp", protectMcp, express.json({ limit: "6mb" }), async (req, res) =>
       id: req.body.id ?? null,
       result: {
         resultType: "complete",
-        supportedVersions: ["2025-03-26", "2024-11-05"],
+        supportedVersions: ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"],
         capabilities: { tools: { listChanged: false } },
-        _meta: { "io.modelcontextprotocol/serverInfo": { name: "local-coding-files", version: "2.2.0" } },
+        _meta: { "io.modelcontextprotocol/serverInfo": { name: "local-coding-files", version: "2.2.1" } },
         instructions: "Work like a careful coding agent: inspect the workspace and Git state before editing, use search_text to locate code, read diffs after edits, and run bounded project tasks to verify changes. Filesystem tools work only inside configured folders. Guarded terminal mode allows only bounded coding tasks; arbitrary PowerShell requires the owner to explicitly enable Full mode in the local dashboard. Never use destructive file or terminal actions without user confirmation.",
         ttlMs: 60000,
         cacheScope: "private",
