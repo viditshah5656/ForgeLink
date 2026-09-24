@@ -19,6 +19,8 @@ const DASHBOARD_DIR = path.join(here, "web");
 const ACCESS_CONFIG_FILE = path.join(here, "access-config.json");
 const AUDIT_LOG_FILE = path.join(here, "agent-audit.jsonl");
 const MAX_SEARCH_FILE_SIZE = 1024 * 1024;
+const ADVANCED_TOOLS = process.env.ADVANCED_TOOLS === "1";
+const ADVANCED_TOOL_NAMES = new Set(["inspect_workspace", "search_text", "get_git_status", "get_git_diff", "run_project_task"]);
 
 async function loadEnv() {
   const envFile = path.join(here, ".env");
@@ -280,7 +282,7 @@ const TOOL_CATALOG = [
   ["delete_file", "Delete one file; directories are protected", "Delete"],
   ["run_project_task", "Run a bounded project test, build, or Git inspection task", "Execute"],
   ["run_terminal_command", "Run a PowerShell command when terminal access is enabled", "Execute"],
-].map(([name, description, access]) => ({ name, description, access }));
+].filter(([name]) => ADVANCED_TOOLS || !ADVANCED_TOOL_NAMES.has(name)).map(([name, description, access]) => ({ name, description, access }));
 
 async function tunnelState() {
   try {
@@ -421,7 +423,12 @@ async function searchText(directory, query, options = {}) {
 }
 
 function createFilesystemServer() {
-  const server = new McpServer({ name: "local-coding-files", version: "2.2.1" });
+  const server = new McpServer({ name: "local-coding-files", version: "2.1.0" });
+  const originalRegisterTool = server.registerTool.bind(server);
+  server.registerTool = (name, config, handler) => {
+    if (!ADVANCED_TOOLS && ADVANCED_TOOL_NAMES.has(name)) return server;
+    return originalRegisterTool(name, config, handler);
+  };
   const common = { _meta: oauthMeta() };
 
   server.registerTool("list_allowed_directories", { description: "Show all filesystem roots available to this server.", inputSchema: {}, annotations: { readOnlyHint: true }, ...common }, async () => textResult(accessSettings.allowedRoots.join("\n")));
@@ -608,7 +615,7 @@ dashboardApp.get("/dashboard/api/status", async (_req, res) => {
     tunnelId,
     uptimeSeconds: Math.floor(process.uptime()),
     toolCount: TOOL_CATALOG.length,
-    version: "2.2.1",
+    version: "2.1.0",
   });
 });
 
@@ -789,9 +796,9 @@ app.post("/mcp", protectMcp, express.json({ limit: "6mb" }), async (req, res) =>
       id: req.body.id ?? null,
       result: {
         resultType: "complete",
-        supportedVersions: ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"],
+        supportedVersions: ["2025-03-26", "2024-11-05"],
         capabilities: { tools: { listChanged: false } },
-        _meta: { "io.modelcontextprotocol/serverInfo": { name: "local-coding-files", version: "2.2.1" } },
+        _meta: { "io.modelcontextprotocol/serverInfo": { name: "local-coding-files", version: "2.1.0" } },
         instructions: "Work like a careful coding agent: inspect the workspace and Git state before editing, use search_text to locate code, read diffs after edits, and run bounded project tasks to verify changes. Filesystem tools work only inside configured folders. Guarded terminal mode allows only bounded coding tasks; arbitrary PowerShell requires the owner to explicitly enable Full mode in the local dashboard. Never use destructive file or terminal actions without user confirmation.",
         ttlMs: 60000,
         cacheScope: "private",
