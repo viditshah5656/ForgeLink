@@ -1,0 +1,8 @@
+dashboardApp.get("/dashboard/api/security-maintenance-request", (req, res) => {
+  if (!authorizeAccessPromptRequest(req, res)) return;
+  const request = approvedSecurityMaintenanceRequestForDesktop();
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ request });
+});
+
+dashboardApp.get("/dashboard/api/logs", async (req, res) => {

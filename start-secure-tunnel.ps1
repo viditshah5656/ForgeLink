@@ -2,6 +2,12 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+
+# Keep the backend and tunnel under the signed-in user's token. Windows ACLs
+# still govern file access; starting MCP does not require an administrator UAC.
+
+. (Join-Path $PSScriptRoot 'scripts\disable-console-selection.ps1')
+
 $SetupDir = $PSScriptRoot
 $Client = Join-Path $SetupDir 'bin\tunnel-client.exe'
 $ServerScript = Join-Path $SetupDir 'server.mjs'
@@ -17,77 +23,95 @@ $TunnelErr = Join-Path $DataDir 'tunnel.err.log'
 if (-not (Test-Path -LiteralPath $ProfileFile)) { throw 'Run .\configure-secure-tunnel.ps1 -TunnelId tunnel_... first.' }
 if (-not (Test-Path -LiteralPath $KeyFile)) { throw 'The encrypted runtime API key is missing. Run configure-secure-tunnel.ps1 again.' }
 
-# Replace only a prior tunnel client for this same local-files profile. This
-# lets an upgraded server reconnect without touching unrelated tunnel clients.
-$HealthOwner = Get-NetTCPConnection -LocalPort 24124 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($HealthOwner) {
-    $HealthProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($HealthOwner.OwningProcess)" -ErrorAction SilentlyContinue
-    if ($HealthProcess.Name -eq 'tunnel-client.exe' -and $HealthProcess.CommandLine -like '*--profile*local-files*') {
-        Stop-Process -Id $HealthProcess.ProcessId -Force
-        $HealthDeadline = (Get-Date).AddSeconds(5)
-        while ((Get-Date) -lt $HealthDeadline -and (Get-NetTCPConnection -LocalPort 24124 -State Listen -ErrorAction SilentlyContinue)) {
-            Start-Sleep -Milliseconds 100
-        }
-    } else {
-        throw "Port 24124 is already used by PID $($HealthOwner.OwningProcess) ($($HealthProcess.Name)). Refusing to stop an unrelated process."
-    }
+function Test-McpReady {
+    try {
+        $Body = @{ jsonrpc = '2.0'; id = 1; method = 'tools/list'; params = @{} } | ConvertTo-Json -Depth 8 -Compress
+        $Response = Invoke-RestMethod -Uri 'http://127.0.0.1:24024/mcp' -Method Post `
+            -Headers @{ Accept = 'application/json, text/event-stream' } `
+            -ContentType 'application/json' -Body $Body -TimeoutSec 3
+        return ($Response.result.tools.Count -gt 0 -and -not $Response.error)
+    } catch { return $false }
 }
 
-$PortOwner = Get-NetTCPConnection -LocalPort 24024 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($PortOwner) {
-    $OwnerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($PortOwner.OwningProcess)" -ErrorAction SilentlyContinue
-    if ($OwnerProcess.Name -eq 'node.exe' -and $OwnerProcess.CommandLine -like "*$ServerScript*") {
-        Stop-Process -Id $OwnerProcess.ProcessId -Force
-    } else {
-        throw "Port 24024 is already used by PID $($PortOwner.OwningProcess) ($($OwnerProcess.Name))."
-    }
+function Test-TunnelReady {
+    try {
+        $Response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:24124/readyz' -TimeoutSec 2
+        return ($Response.StatusCode -eq 200 -and $Response.Content.Trim().Trim('"') -eq 'ready')
+    } catch { return $false }
+}
+
+# Re-running the launcher must not tear down a healthy backend/tunnel pair.
+$BackendReady = Test-McpReady
+$TunnelReady = Test-TunnelReady
+if ($BackendReady -and $TunnelReady) {
+    Write-Host 'READY: ForgeLink MCP and secure tunnel are already live.' -ForegroundColor Green
+    Write-Host 'Dashboard: http://127.0.0.1:24025/dashboard/' -ForegroundColor Cyan
+    exit 0
 }
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-Remove-Item -LiteralPath $ServerOut, $ServerErr -Force -ErrorAction SilentlyContinue
-$Server = Start-Process -FilePath 'node.exe' -ArgumentList @($ServerScript, '--public-url=http://localhost:24024', '--no-auth') -WorkingDirectory $SetupDir -RedirectStandardOutput $ServerOut -RedirectStandardError $ServerErr -WindowStyle Hidden -PassThru
+$Server = $null
+$TunnelClient = $null
+
+if (-not $BackendReady) {
+    & (Join-Path $SetupDir 'stop-previous-mcp.ps1') -BackendOnly
+    Remove-Item -LiteralPath $ServerOut, $ServerErr -Force -ErrorAction SilentlyContinue
+    $Server = Start-Process -FilePath 'node.exe' -ArgumentList @($ServerScript, '--public-url=http://localhost:24024', '--no-auth') -WorkingDirectory $SetupDir -RedirectStandardOutput $ServerOut -RedirectStandardError $ServerErr -WindowStyle Hidden -PassThru
+}
 
 try {
-    $Deadline = (Get-Date).AddSeconds(10)
-    while ((Get-Date) -lt $Deadline -and -not (Get-NetTCPConnection -LocalPort 24024 -State Listen -ErrorAction SilentlyContinue)) {
-        if ($Server.HasExited) { throw "Local MCP server exited. See $ServerErr" }
-        Start-Sleep -Milliseconds 200
+    if (-not $BackendReady) {
+        $Deadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $Deadline) {
+            if ($Server.HasExited) { throw "Local MCP server exited. See $ServerErr" }
+            $McpListener = Get-NetTCPConnection -LocalPort 24024 -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $Server.Id }
+            $DashboardListener = Get-NetTCPConnection -LocalPort 24025 -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $Server.Id }
+            if ($McpListener -and $DashboardListener -and (Test-McpReady)) { $BackendReady = $true; break }
+            Start-Sleep -Milliseconds 250
+        }
+        if (-not $BackendReady) { throw "Local MCP server did not open ports 24024 and 24025 or tools/list failed. See $ServerErr" }
     }
-    if (-not (Get-NetTCPConnection -LocalPort 24024 -State Listen -ErrorAction SilentlyContinue)) { throw 'Local MCP server did not become ready.' }
 
-    $Encrypted = (Get-Content -Raw -LiteralPath $KeyFile).Trim()
-    $SecureKey = $Encrypted | ConvertTo-SecureString
-    $Pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureKey)
-    try { $env:CONTROL_PLANE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($Pointer) }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Pointer) }
+    if (-not $TunnelReady) {
+        $Encrypted = (Get-Content -Raw -LiteralPath $KeyFile).Trim()
+        $SecureKey = $Encrypted | ConvertTo-SecureString
+        $Pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureKey)
+        try { $env:CONTROL_PLANE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($Pointer) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Pointer); $SecureKey.Dispose() }
 
-    Write-Host 'Checking the stable OpenAI Secure MCP Tunnel...' -ForegroundColor Green
-    & $Client doctor --profile local-files --profile-dir $ProfileDir --explain
-    if ($LASTEXITCODE -ne 0) { throw 'Secure MCP Tunnel health checks failed.' }
-    Remove-Item -LiteralPath $TunnelOut, $TunnelErr -Force -ErrorAction SilentlyContinue
-    $TunnelClient = Start-Process -FilePath $Client -ArgumentList @('run', '--profile', 'local-files', '--profile-dir', $ProfileDir, '--log.level', 'warn') -WorkingDirectory $SetupDir -RedirectStandardOutput $TunnelOut -RedirectStandardError $TunnelErr -WindowStyle Hidden -PassThru
-    Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
+        Write-Host 'Checking the stable OpenAI Secure MCP Tunnel...' -ForegroundColor Green
+        & $Client doctor --profile local-files --profile-dir $ProfileDir --explain
+        if ($LASTEXITCODE -ne 0) { throw 'Secure MCP Tunnel health checks failed.' }
+        Remove-Item -LiteralPath $TunnelOut, $TunnelErr -Force -ErrorAction SilentlyContinue
+        $TunnelClient = Start-Process -FilePath $Client -ArgumentList @('run', '--profile', 'local-files', '--profile-dir', $ProfileDir, '--log.level', 'warn') -WorkingDirectory $SetupDir -RedirectStandardOutput $TunnelOut -RedirectStandardError $TunnelErr -WindowStyle Hidden -PassThru
+        Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
 
-    $ReadyDeadline = (Get-Date).AddSeconds(30)
-    $IsReady = $false
-    while ((Get-Date) -lt $ReadyDeadline -and -not $TunnelClient.HasExited) {
-        try {
-            $ReadyResponse = Invoke-RestMethod 'http://127.0.0.1:24124/readyz' -TimeoutSec 2
-            if ($ReadyResponse -eq 'ready') { $IsReady = $true; break }
-        } catch {}
-        Start-Sleep -Milliseconds 300
+        $ReadyDeadline = (Get-Date).AddSeconds(30)
+        $IsReady = $false
+        while ((Get-Date) -lt $ReadyDeadline -and -not $TunnelClient.HasExited) {
+            if (Test-TunnelReady) { $IsReady = $true; break }
+            Start-Sleep -Milliseconds 300
+        }
+        if (-not $IsReady) { throw "Secure MCP Tunnel did not become ready. See $TunnelErr" }
     }
-    if (-not $IsReady) { throw "Secure MCP Tunnel did not become ready. See $TunnelErr" }
+    if ($Server -and $Server.HasExited) { throw "Local MCP server exited. See $ServerErr" }
 
-    Write-Host 'READY: Local Files is connected through the permanent tunnel.' -ForegroundColor Green
-    $ConfiguredTunnel = ([regex]::Match((Get-Content -Raw -LiteralPath $ProfileFile), 'tunnel_id:\s*["'']?([^"''\r\n]+)')).Groups[1].Value.Trim()
-    Write-Host "Tunnel: local-coding-files ($ConfiguredTunnel)"
+    Write-Host 'READY: ForgeLink is connected through the permanent tunnel.' -ForegroundColor Green
+    if ($TunnelClient) {
+        $ConfiguredTunnel = ([regex]::Match((Get-Content -Raw -LiteralPath $ProfileFile), 'tunnel_id:\s*["'']?([^"''\r\n]+)')).Groups[1].Value.Trim()
+        Write-Host "Tunnel: local-coding-files ($ConfiguredTunnel)"
+    } else {
+        Write-Host 'Using the already connected ForgeLink tunnel.'
+    }
     Write-Host 'Dashboard: http://127.0.0.1:24025/dashboard/' -ForegroundColor Cyan
-    Write-Host 'Keep this window open. Press Ctrl+C to stop.' -ForegroundColor Yellow
-    Wait-Process -Id $TunnelClient.Id
-    exit $TunnelClient.ExitCode
+    if ($TunnelClient) {
+        Write-Host 'Keep this window open. Press Ctrl+C to stop.' -ForegroundColor Yellow
+        Wait-Process -Id $TunnelClient.Id
+        exit $TunnelClient.ExitCode
+    }
+    exit 0
 } finally {
     Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
     if ($TunnelClient -and -not $TunnelClient.HasExited) { Stop-Process -Id $TunnelClient.Id -Force }
-    if ($Server -and -not $Server.HasExited) { Stop-Process -Id $Server.Id -Force }
+    if ($Server -and -not $Server.HasExited -and $TunnelClient) { Stop-Process -Id $Server.Id -Force }
 }

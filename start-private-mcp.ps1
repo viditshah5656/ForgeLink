@@ -2,18 +2,28 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+
+# Filesystem allowlists do not override Windows ACLs or integrity levels. Ask
+# Windows for an explicit UAC approval so the backend can reach protected paths.
+$CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$CurrentPrincipal = [Security.Principal.WindowsPrincipal]::new($CurrentIdentity)
+if (-not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $PowerShellExe = Join-Path $PSHOME 'powershell.exe'
+    $ElevatedArgs = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $PSCommandPath
+    try {
+        $ElevatedProcess = Start-Process -FilePath $PowerShellExe -Verb RunAs -WindowStyle Normal -WorkingDirectory $PSScriptRoot -ArgumentList $ElevatedArgs -PassThru -Wait
+    } catch {
+        throw 'ForgeLink needs Windows administrator approval for full-computer access. Approve the UAC prompt and start it again.'
+    }
+    exit $ElevatedProcess.ExitCode
+}
+
+. (Join-Path $PSScriptRoot 'scripts\disable-console-selection.ps1')
+
 $SetupDir = $PSScriptRoot
 $ServerScript = Join-Path $SetupDir 'server.mjs'
 
-$PortOwner = Get-NetTCPConnection -LocalPort 24024 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($PortOwner) {
-    $OwnerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($PortOwner.OwningProcess)" -ErrorAction SilentlyContinue
-    if ($OwnerProcess.Name -eq 'node.exe' -and $OwnerProcess.CommandLine -like "*$ServerScript*") {
-        Stop-Process -Id $OwnerProcess.ProcessId -Force
-    } else {
-        throw "Port 24024 is already used by PID $($PortOwner.OwningProcess) ($($OwnerProcess.Name)). Refusing to stop an unrelated process."
-    }
-}
+& (Join-Path $SetupDir 'stop-previous-mcp.ps1')
 
 Write-Host 'Starting private MCP server for OpenAI Secure MCP Tunnel...' -ForegroundColor Green
 Write-Host 'Local MCP URL: http://127.0.0.1:24024/mcp'

@@ -43,7 +43,7 @@ try {
   await callTool("create_directory", { path: gitRoot });
   const tracked = path.join(gitRoot, "tracked.txt");
   await callTool("write_file", { path: tracked, content: "version one\n" });
-  await callTool("run_terminal_command", { cwd: gitRoot, command: "git init; git config user.name 'MCP Verification'; git config user.email 'mcp-test@example.invalid'" });
+  await callTool("run_terminal_command", { cwd: gitRoot, command: 'git init && git config user.name "MCP Verification" && git config user.email "mcp-test@example.invalid"' });
   await callTool("git_stage", { path: gitRoot, paths: ["tracked.txt"] });
   const commit = await callTool("git_commit", { path: gitRoot, message: "Verify local Git tools" });
   await callTool("edit_text_file", { path: tracked, edits: [{ oldText: "version one", newText: "version two", expectedOccurrences: 1 }] });
@@ -54,13 +54,13 @@ try {
   await callTool("delete_path", { path: testRoot, recursive: true });
 
   const checks = {
-    editAndRead: read.structuredContent?.content?.includes("gamma") && read.structuredContent?.content?.includes("delta"),
-    hash: hash.structuredContent?.content?.includes("sha256"),
+    editAndRead: read.content?.some((item) => item.type === "text" && item.text.includes("gamma")) && read.content?.some((item) => item.type === "text" && item.text.includes("delta")),
+    hash: hash.content?.some((item) => item.type === "text" && item.text.includes("sha256")),
     imageRead: imageResult.content?.[0]?.type === "image" && imageResult.content[0].mimeType === "image/png",
-    gitLog: Boolean(log.structuredContent?.content),
-    gitBranches: Boolean(branches.structuredContent?.content),
-    gitCommit: commit.structuredContent?.content?.includes("exitCode"),
-    gitUnstage: gitStatus.structuredContent?.content?.includes(" M tracked.txt"),
+    gitLog: Boolean(log.content?.some((item) => item.type === "text" && item.text)),
+    gitBranches: Boolean(branches.content?.some((item) => item.type === "text" && item.text)),
+    gitCommit: commit.content?.some((item) => item.type === "text" && item.text.includes("exitCode")),
+    gitUnstage: gitStatus.content?.some((item) => item.type === "text" && item.text.includes(" M tracked.txt")),
     cleanup: !fs.existsSync(testRoot) && !fs.existsSync(copyRoot),
   };
   if (Object.values(checks).some((value) => !value)) throw new Error(`Capability checks failed: ${JSON.stringify(checks)}`);

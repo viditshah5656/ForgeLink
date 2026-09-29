@@ -6,6 +6,7 @@ let pickerPath = null;
 let pickerParent = null;
 let allowedRoots = [];
 let state = null;
+const BRANDING_FALLBACK = { name: 'ForgeLink', developer: 'Vidit Shah', logoAsset: 'branding-logo.png' };
 
 async function api(url, options) {
   const response = await fetch(url, options);
@@ -14,6 +15,16 @@ async function api(url, options) {
   return body;
 }
 function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => el.classList.remove('show'), 1900); }
+async function loadBranding() {
+  try {
+    const branding = { ...BRANDING_FALLBACK, ...(await api('branding.json')) };
+    document.title = `${branding.name} Setup`;
+    $('#brandName').textContent = branding.name;
+    $('#brandSubtitle').textContent = `${branding.developer} · MCP for ChatGPT`;
+    $('#brandLogo').src = branding.logoAsset;
+    $('#brandLogo').alt = `${branding.name} logo`;
+  } catch {}
+}
 function escapeHTML(value = '') { const el = document.createElement('span'); el.textContent = value; return el.innerHTML; }
 function escapeAttr(value = '') { return escapeHTML(value).replaceAll('`', '&#96;'); }
 function showStep(next) {
@@ -62,7 +73,7 @@ async function configure() {
   const button = $('#configureButton'); const error = $('#setupError'); error.hidden = true; button.disabled = true; $('#finishBack').disabled = true; $('#progressWrap').hidden = false;
   try {
     const result = await api('api/configure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tunnelId: $('#tunnelId').value.trim(), apiKey: $('#apiKey').value.trim(), roots: allowedRoots, terminalEnabled: $('#terminalEnabled').checked }) });
-    $('#apiKey').value = ''; $('#progressText').textContent = 'Configuration encrypted. Starting Local Files MCP…';
+    $('#apiKey').value = ''; $('#progressText').textContent = 'Configuration encrypted. Starting ForgeLink…';
     const started = await api('api/start', { method: 'POST' });
     $('#progressText').textContent = 'Connected. Opening your local dashboard…';
     setTimeout(() => location.href = started.dashboard, 650);
@@ -84,4 +95,5 @@ $('#revealKey').addEventListener('click', () => { const input = $('#apiKey'); in
 $('#drivesButton').addEventListener('click', () => browse(null)); $('#upButton').addEventListener('click', () => browse(pickerParent));
 $('#addFolderButton').addEventListener('click', () => { if (!selectedPath || /^[A-Za-z]:\\$/.test(selectedPath)) return; if (allowedRoots.some(root => root.toLowerCase() === selectedPath.toLowerCase())) return toast('That folder is already added'); allowedRoots.push(selectedPath); renderFolders(); toast('Folder added'); });
 $('#configureButton').addEventListener('click', configure);
+loadBranding();
 initialize();

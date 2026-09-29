@@ -1,0 +1,38 @@
+function npmProjectCommand(args) {
+  if (!IS_WINDOWS) return ["npm", args];
+
+  const candidates = [
+    process.env.npm_execpath,
+    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+  ].filter((candidate) => typeof candidate === "string" && candidate.trim());
+
+  const npmCli = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!npmCli) throw new Error("npm CLI JavaScript entrypoint could not be resolved safely.");
+  return [process.execPath, [npmCli, ...args]];
+}
+
+function projectTaskCommand(task, script) {
+  const safeScript = typeof script === "string" && /^[A-Za-z0-9:_-]+$/.test(script) ? script : null;
+  const tasks = {
+    "git-status": [GIT_COMMAND, ["status", "--short", "--branch"]],
+    "git-diff": [GIT_COMMAND, ["--no-pager", "diff", "--stat"]],
+    "npm-test": npmProjectCommand(["test"]),
+    "npm-run": safeScript ? npmProjectCommand(["run", safeScript]) : null,
+    "npm-build": npmProjectCommand(["run", "build"]),
+    "npm-lint": npmProjectCommand(["run", "lint"]),
+    "npm-typecheck": npmProjectCommand(["run", "typecheck"]),
+    "node-test": [IS_WINDOWS ? "node.exe" : "node", ["--test"]],
+    "python-pytest": [IS_WINDOWS ? "python.exe" : "python3", ["-m", "pytest"]],
+    "python-unittest": [IS_WINDOWS ? "python.exe" : "python3", ["-m", "unittest", "discover"]],
+    "python-compile": [IS_WINDOWS ? "python.exe" : "python3", ["-m", "compileall", "."]],
+    "cargo-check": [IS_WINDOWS ? "cargo.exe" : "cargo", ["check"]],
+    "cargo-test": [IS_WINDOWS ? "cargo.exe" : "cargo", ["test"]],
+    "go-test": [IS_WINDOWS ? "go.exe" : "go", ["test", "./..."]],
+    "dotnet-build": [IS_WINDOWS ? "dotnet.exe" : "dotnet", ["build", "--no-restore"]],
+    "dotnet-test": [IS_WINDOWS ? "dotnet.exe" : "dotnet", ["test", "--no-restore"]],
+  };
+  const selected = tasks[task];
+  if (!selected) throw new Error("Unsupported project task. Use one of the documented task identifiers.");
+  return selected;
+}
+

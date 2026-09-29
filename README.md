@@ -1,151 +1,306 @@
-# Local Files MCP for ChatGPT
+<div align="center">
 
-A private Windows and macOS desktop app that lets ChatGPT work with coding folders you explicitly select. It uses an OpenAI Secure MCP Tunnel, so your MCP server stays on your computer—there is no changing public URL and no inbound firewall port.
+<img src="./logo.png" alt="ForgeLink logo" width="132" />
 
-> The repository contains **no credentials**, folder paths, logs, local binaries, or tunnel IDs. The desktop app encrypts each machine's runtime API key with Windows DPAPI or macOS Keychain and keeps it outside Git.
+# ForgeLink
 
-## Desktop app - easiest setup
+### A secure local engineering bridge between ChatGPT and your computer.
 
-Local Files now includes a full Electron + Vite desktop application for Windows and macOS. The installer carries its own runtime and a checksum-verified official OpenAI tunnel client, so an end user does not need Node.js, npm, PowerShell, or Terminal.
+**Controlled filesystem access · Git-aware coding · headless terminal execution · cross-platform system tools · recoverable engineering workflows · MCP Apps**
 
-The five-screen setup asks the user to:
+[![Version](https://img.shields.io/badge/version-4.1.3-111111?style=for-the-badge)](./package.json)
+[![License](https://img.shields.io/badge/license-MIT-111111?style=for-the-badge)](./LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-111111?style=for-the-badge)](#platform-support)
+[![Electron](https://img.shields.io/badge/Electron-44-111111?style=for-the-badge&logo=electron)](https://www.electronjs.org/)
+[![MCP](https://img.shields.io/badge/protocol-MCP-111111?style=for-the-badge)](https://modelcontextprotocol.io/)
 
-1. Pick the folders ChatGPT may access with the native folder picker.
-2. Create an OpenAI Secure MCP Tunnel and runtime API key using direct links in the app.
-3. Choose Files only, guarded project tasks, or full terminal access.
-4. Click **Save securely & connect**.
-5. Open ChatGPT settings and select the tunnel shown by the app.
+</div>
 
-Runtime keys are encrypted with Windows DPAPI or macOS Keychain through Electron `safeStorage`. Configuration, encrypted secrets, OAuth state, logs, and downloaded runtime files live in the operating system's per-user application-data folder, not in the repository.
+---
 
-### Run the desktop app from source
+ForgeLink is a desktop and local-server bridge that gives ChatGPT **explicit, policy-controlled access** to approved files, developer tools, Git repositories, terminals, diagnostics, and selected operating-system capabilities.
 
-```powershell
-npm install
+The design is intentionally **ChatGPT-first**: ChatGPT remains the reasoning and coding engine. ForgeLink provides the secure local execution plane, durable engineering state, transaction safety, project memory, verification surfaces, and rich MCP Apps used to review plans, artifacts, permissions, and code changes.
+
+> **Privacy boundary:** credentials, OAuth material, local grants, tunnel state, runtime logs, recovery data, process state, and machine-specific configuration are intentionally excluded from this repository.
+
+## Why ForgeLink
+
+| Capability | What it provides |
+| --- | --- |
+| **Controlled local files** | Read/write access only inside owner-approved roots, with read-only and temporary scopes supported. |
+| **Git-native engineering** | Status, diffs, branches, staging, commits, repository discovery, and transaction-scoped code review. |
+| **Recoverable edits** | Preview → apply → verify → commit flow with exact snapshots, locks, rollback, and stale-state protection. |
+| **Headless terminal + PTY** | Bounded project tasks, background jobs, and persistent interactive shells under explicit Full Terminal access. |
+| **Cross-platform system control** | Native Windows, macOS, and Linux adapters with platform-aware commands and safety boundaries. |
+| **Code intelligence** | JavaScript/TypeScript symbols, definitions, references, callers/callees, signatures, imports/exports, rename previews, and import organization. |
+| **Engineering protocol** | Durable implementation-plan approval, milestones, verification, walkthrough, and final code-change review. |
+| **Project semantic memory** | Private per-project engineering context that improves continuity without running a local LLM or vector database. |
+| **MCP Apps** | Rich approval, artifact, PDF/report, and Codex-style diff-review surfaces inside compatible ChatGPT hosts. |
+| **Agent orchestration** | Scoped task graphs, native worker packets, bounded process access, resource budgets, and reviewed integration. |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Owner] -->|approves scope & plans| C[ChatGPT]
+    C <-->|MCP| T[Secure MCP Tunnel / HTTPS OAuth]
+    T --> S[ForgeLink MCP Server]
+
+    S --> P[Permission & Safety Policy]
+    P --> F[Filesystem + Git]
+    P --> X[Headless Terminal / PTY]
+    P --> O[Windows / macOS / Linux Controls]
+
+    S --> E[Engineering Protocol]
+    E --> R[Transactions + Recovery]
+    E --> V[Verification + Code Review]
+    E --> M[Project Semantic Memory]
+
+    S --> A[MCP Apps]
+    A --> AP[Plan / Permission Approval]
+    A --> AR[Artifacts + PDF]
+    A --> CR[Code Changes / Diff]
+
+    classDef core fill:#111,color:#fff,stroke:#111;
+    class S,E,P core;
+```
+
+### Engineering lifecycle
+
+```mermaid
+flowchart LR
+    A[Understand] --> B[Inspect repository]
+    B --> C[Implementation plan]
+    C --> D{Owner approval}
+    D -->|Approved| E[Recoverable transaction]
+    D -->|Declined| Z[Stop]
+    E --> F[Run tests / verification]
+    F --> G{Pass?}
+    G -->|No| H[Recover / fix]
+    H --> E
+    G -->|Yes| I[Walkthrough]
+    I --> J[Final code-change review]
+    J --> K[Git commit / publish]
+```
+
+## Clone and run from source
+
+### Prerequisites
+
+- Git
+- A current Node.js LTS release with npm
+- Native build tooling required by Electron / `node-pty` on your platform
+- Python only if you intend to build the ChatGPT plugin package
+- A ChatGPT account/workspace that supports the MCP connection mode you plan to use
+
+### 1. Clone
+
+```bash
+git clone https://github.com/viditshah5656/ForgeLink.git
+cd ForgeLink
+```
+
+### 2. Install dependencies
+
+```bash
+npm ci
+```
+
+`node_modules/` is intentionally **not** stored in Git. The committed `package-lock.json` is the reproducibility source for npm dependencies.
+
+### 3. Prepare generated assets
+
+```bash
+npm run sync:branding
+npm run build:artifact-ui
 node scripts/prepare-tunnel-client.mjs
+```
+
+The tunnel client and generated desktop assets are downloaded/built locally and are deliberately excluded from source control.
+
+### 4. Start the desktop app
+
+```bash
 npm start
 ```
 
-### Build an installer
+For Electron Forge development mode:
 
-```powershell
-npm run make
+```bash
+npm run dev
 ```
 
-Windows produces a no-admin Squirrel `Setup.exe`. macOS produces a DMG and ZIP. Installer builds must run on their target operating system; the included GitHub Actions workflow builds both whenever a `v*` tag is pushed or the workflow is started manually. Production distribution should add platform code-signing and Apple notarization credentials to avoid operating-system trust warnings.
+### Optional command-line/server configuration
 
-Desktop-only checks can be run with:
+Copy the safe template and edit it locally:
 
-```powershell
+**Windows**
+
+```bat
+copy .env.example .env
+```
+
+**macOS / Linux**
+
+```bash
+cp .env.example .env
+```
+
+Never commit the resulting `.env`. The desktop application keeps its runtime configuration and encrypted secrets outside the repository.
+
+## Build installers
+
+Builds must run on their target operating system.
+
+| Target | Command |
+| --- | --- |
+| Windows | `npm run make:win` |
+| macOS | `npm run make:mac` |
+| Linux | `npm run make:linux` |
+| Current host | `npm run make` |
+
+Lower-level packaging without installer creation is also available through `npm run package:win`, `npm run package:mac`, and `npm run package:linux`.
+
+The GitHub Actions workflow in `.github/workflows/desktop-build.yml` provides repository-side build automation for supported release flows.
+
+## Verification
+
+Run the checks that match the work you changed:
+
+```bash
 npm run lint:desktop
+npm test
+npm run test:safety
 npm run verify:desktop
+npm run verify:target-matrix
+npm run verify:platforms
 ```
 
-## Command-line setup - developers and servers
+When the local MCP server is already running, capability verification is also available through:
 
-The commands below remain available for developers and headless machines. Most users should use the desktop app above.
-
-### Legacy browser wizard
-
-Requirements: Windows 10/11, Node.js 20+, Git, an OpenAI Platform account with a tunnel and a runtime API key.
-
-```powershell
-git clone https://github.com/YOUR_GITHUB_USERNAME/local-files-mcp.git
-cd local-files-mcp
-.\setup.ps1
+```bash
+npm run verify
 ```
-
-The local browser wizard opens at `http://127.0.0.1:24023` and walks through everything:
-
-1. Creates or locates your OpenAI tunnel.
-2. Creates a runtime API key with **Tunnels Read + Use**.
-3. Lets you browse this PC and select one or more coding folders.
-4. Chooses execution access: **Off**, **Guarded** (Git/tests/build scripts only), or **Full** PowerShell.
-5. Downloads the current official `tunnel-client`, verifies its SHA-256 checksum, encrypts your key for your Windows account, and starts the service.
-
-The setup wizard is localhost-only and the API key is never printed, returned by an API, logged, or committed.
-
-## Connect ChatGPT Web
-
-With `start-mcp.ps1` running:
-
-1. In ChatGPT, enable Developer mode if your account/workspace requires it.
-2. Open **Plugins** and click **+**.
-3. Name it `Local Files`.
-4. Choose **Tunnel** for Connection.
-5. Select your tunnel or paste the `tunnel_…` ID shown by the wizard.
-6. Choose **No authentication**.
-7. Create the plugin, then use it in a new chat.
-
-Secure MCP Tunnel is an outbound-only bridge; it needs a tunnel ID, a runtime API key, and local access to the MCP server. See the [official Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
-
-## Permanent public URL (Cloudflare Named Tunnel)
-
-`trycloudflare.com` quick tunnels are intentionally temporary: their URL changes at restart. For a fixed URL that works with ChatGPT's **Server URL** connection mode, use a Cloudflare **Named Tunnel** and a hostname in a domain you control.
-
-1. In Cloudflare Zero Trust, create a remotely managed tunnel.
-2. Add a public hostname such as `mcp.example.com`, routed to `http://127.0.0.1:24024`.
-3. Copy the tunnel token from the tunnel's connector installation command (the long value after `--token`).
-4. On the local PC, start it without placing the token in shell history:
-
-```powershell
-cd local-files-mcp
-$token = Read-Host 'Paste Cloudflare tunnel token' -AsSecureString
-$ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($token)
-try {
-  $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
-  .\start-cloudflare-named-tunnel.ps1 -Hostname mcp.example.com -TunnelToken $plain
-} finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
-}
-```
-
-In ChatGPT create a plugin with **Server URL** `https://mcp.example.com/mcp` and **OAuth** authentication. The runner starts the local MCP with that HTTPS origin, so OAuth discovery, issuer, and callback URLs match the fixed hostname.
-
-The hostname remains fixed across restarts and clones. Each PC needs its own running connector and may use its own Cloudflare tunnel/token; never commit or share a token. Cloudflare documents that a remotely managed tunnel is run with its tunnel token, so treat that token like a password. [Cloudflare tunnel token documentation](https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/)
-
-## Daily use
-
-```powershell
-.\start-mcp.ps1
-```
-
-Keep the resulting PowerShell window open. Use the local dashboard at [http://127.0.0.1:24025/dashboard/](http://127.0.0.1:24025/dashboard/) to inspect status, add folders, view logs, and control terminal access.
-
-## Agentic coding workflow
-
-When you enable the Local Files plugin in a ChatGPT chat, it now supports a disciplined coding loop:
-
-1. `inspect_workspace` identifies the project, its scripts, and Git state.
-2. `search_text`, `directory_tree`, and file reads locate the relevant implementation.
-3. File tools make only the requested edit inside folders you allowed.
-4. `get_git_diff` checks the actual change afterward.
-5. `run_project_task` runs a bounded Git, Node, npm, Python, or .NET verification command.
-
-Version 3 adds Codex-style local workspace primitives: ranged reads, image inspection, binary writes, guarded exact edits, appends, checksums, safe file/folder copies, explicit recursive deletion, Git history/branch inspection, staging, unstaging, local commits, and longer build/test runs for Node, Python, Rust, Go, and .NET projects. Full PowerShell remains available only when **Full** mode is enabled locally.
-
-Use a prompt such as: “Inspect this project, explain your plan, make the smallest safe change, then show the Git diff and run the relevant test.”
 
 ## Security model
 
-- Filesystem tools are confined to folders you add in the local UI.
-- The dashboard and MCP listener bind to `127.0.0.1` only.
-- The tunnel makes outbound HTTPS connections to OpenAI; it does not create a public listener.
-- The runtime key is protected by Windows DPAPI for the current Windows account.
-- Execution is off by default. **Guarded** mode permits only an allowlisted set of project tasks (`git status`, `git diff`, tests, and named npm scripts). **Full** mode permits arbitrary PowerShell and has your Windows user permissions, so it is intentionally broader than the folder list.
-- Every terminal mode change and execution is recorded locally in `agent-audit.jsonl`. Full command contents are not stored; only a SHA-256 fingerprint, working folder, and exit code are recorded.
-- Git ignores `.env`, `access-config.json`, encrypted keys, tunnel profiles, logs, downloaded binaries, and local screenshots.
+ForgeLink treats local-computer access as a capability that must remain explicit, scoped, and revocable.
 
-Run the pre-push safety audit at any time:
+```mermaid
+flowchart TB
+    C[ChatGPT request] --> G{Capability gate}
+    G -->|Filesystem root approved| F[File / Git tools]
+    G -->|Full Terminal approved| T[Headless commands / PTY]
+    G -->|System Control approved| S[Native OS actions]
+    G -->|Protected source maintenance approved| M[Expiring maintenance window]
+    G -->|Not approved| D[Deny]
 
-```powershell
-.\scripts\security-audit.ps1
+    F --> A[Audit + bounded output]
+    T --> A
+    S --> A
+    M --> A
 ```
 
-## Updating ChatGPT metadata
+Core principles:
 
-Refresh the ChatGPT plugin only when MCP tools change. Adding/removing folders takes effect immediately and does not need a plugin refresh.
+- **Least scope:** file tools are confined to approved roots.
+- **Owner approval:** sensitive capabilities and implementation execution use explicit approval gates.
+- **Headless-first automation:** remote keyboard/mouse/browser automation is not the default execution path.
+- **No credential publication:** secrets and machine-local state are stored outside Git or ignored locally.
+- **Recoverable mutation:** substantial coding changes can be previewed and applied as transactions with rollback support.
+- **Current repository beats memory:** project semantic memory is advisory context; current source remains authoritative.
+- **No hidden local model:** ForgeLink does not require a local LLM for the engineering workflow.
+
+## Platform support
+
+ForgeLink contains native platform adapters and packaging targets for:
+
+- **Windows** — PowerShell/CMD/Git Bash/WSL discovery, Windows system controls, DPAPI-backed local secret handling, Squirrel packaging.
+- **macOS** — zsh/bash/sh support, Keychain-backed Electron secure storage, DMG/ZIP packaging, native system integration where implemented.
+- **Linux** — bash/sh/fish support, platform-native system/service inspection where available, Linux packaging targets.
+
+Platform-specific operations fail closed when a capability is unavailable rather than silently executing a different operating-system command.
+
+## Repository layout
+
+```text
+ForgeLink/
+├─ desktop/                 Electron main/preload, renderer, engineering runtimes
+├─ security/                permission broker and deterministic safety policy
+├─ scripts/                 build, packaging, branding, verification and upgrade tools
+├─ docs/                    engineering/security/architecture documentation
+├─ setup-web/               browser-based setup experience
+├─ web/                     local dashboard surfaces
+├─ .github/workflows/       CI / desktop build automation
+├─ server.mjs               ForgeLink MCP backend
+├─ deep-coding-agent.mjs    engineering-agent interaction contract
+├─ branding.json            canonical product branding
+├─ logo.png                 canonical ForgeLink logo
+├─ forge.config.cjs         Electron Forge packaging configuration
+├─ package.json
+└─ package-lock.json
+```
+
+Runtime folders such as `engineering/`, `recovery/`, `native-agent-runtime/`, `presentation-artifacts/`, dependency folders, downloaded binaries, and generated build output are **not part of the source distribution**.
+
+## Connection modes
+
+ForgeLink supports multiple local-to-ChatGPT connection strategies depending on account eligibility and deployment needs:
+
+1. **Secure MCP Tunnel** for an outbound local connection.
+2. **HTTPS Server URL + OAuth** for a public endpoint such as a Cloudflare tunnel.
+3. **Loopback/no-auth development mode** only for trusted local development and verification scenarios.
+
+Use the desktop setup flow whenever possible; it is the intended path for end users.
+
+## Developer workflow
+
+A typical repository change should follow:
+
+1. Inspect workspace and Git state.
+2. Read the relevant implementation and tests.
+3. Create/review an implementation plan for substantial work.
+4. Apply the change through a bounded, recoverable operation.
+5. Inspect the exact diff.
+6. Run the strongest practical tests and platform checks.
+7. Produce a walkthrough.
+8. Review final code changes before committing.
+
+This repository intentionally keeps **source and reproducibility inputs**, not one developer machine's runtime state.
+
+## Local data that must never be committed
+
+Examples include:
+
+- `.env` and OAuth files
+- encrypted keys or `*.dpapi`
+- Cloudflare tunnel tokens
+- approved-root/access configuration
+- tunnel/process/job/session state
+- audit and safety event logs
+- semantic-memory runtime stores
+- recovery snapshots
+- generated installers, binaries, ZIP packages, caches, and `node_modules/`
+
+The root `.gitignore` enforces these boundaries, but always review `git status` before publishing.
+
+## Documentation
+
+- [ForgeLink Engineering Protocol](./docs/FORGELINK-ENGINEERING-PROTOCOL.md)
+- [ChatGPT Permissions Plan](./docs/CHATGPT-PERMISSIONS-PLAN.md)
+- [Windows Control](./docs/FORGELINK-WINDOWS-CONTROL.md)
+- [LLM / Subagent Architecture](./docs/LLM-SUBAGENT-ARCHITECTURE.md)
+- [Deep Coding Agent Contract](./DEEP-CODING-AGENT.md)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+ForgeLink is released under the [MIT License](./LICENSE).
+
+<div align="center">
+
+**ForgeLink 4.1.3 · Built by Vidit Shah**
+
+Secure local capability. Explicit human control. Reproducible engineering.
+
+</div>

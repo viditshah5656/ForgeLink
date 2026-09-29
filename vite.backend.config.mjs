@@ -8,7 +8,7 @@ export default defineConfig({
     outDir: 'dist-backend',
     emptyOutDir: true,
     rollupOptions: {
-      external: [...builtinModules, ...builtinModules.map((name) => `node:${name}`)],
+      external: [...builtinModules, ...builtinModules.map((name) => `node:${name}`), 'typescript'],
       output: { format: 'es', entryFileNames: 'backend-entry.mjs' },
     },
   },

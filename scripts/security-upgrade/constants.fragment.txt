@@ -1,0 +1,35 @@
+const TEMP_ACCESS_TTL_MS = 15 * 60_000; // legacy grants only; new approvals use one-time capabilities
+const ACCESS_REQUEST_TTL_MS = 3 * 60_000;
+const ONE_TIME_ACCESS_CAPABILITY_TTL_MS = 90_000;
+const SECURITY_MAINTENANCE_REQUEST_TTL_MS = 3 * 60_000;
+const SECURITY_MAINTENANCE_APPROVAL_TTL_MS = 60_000;
+const accessRequests = new Map();
+const accessCapabilities = new Map();
+const accessCapabilityContext = new AsyncLocalStorage();
+const securityMaintenanceRequests = new Map();
+let recentSecurityMaintenanceRequestTimes = [];
+const ONE_TIME_ACCESS_ALLOWED_TOOLS = new Set([
+  "list_directory",
+  "directory_tree",
+  "read_text_file",
+  "read_file_lines",
+  "read_multiple_files",
+  "read_image_file",
+  "get_file_info",
+  "hash_file",
+  "find_files",
+  "search_files",
+  "search_text",
+  "inspect_workspace",
+  "create_directory",
+  "make_directory",
+  "create_file",
+  "write_file",
+  "write_binary_file",
+  "append_text_file",
+  "edit_text_file",
+  "copy_path",
+  "move_file",
+  "delete_file",
+  "delete_path"
+]);

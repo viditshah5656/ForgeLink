@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "targetVersion": "4.1.3",
+  "files": {
+    "server": "server.mjs",
+    "accessConfig": "access-config.json"
+  },
+  "operations": [
+    {
+      "type": "replace_exact",
+      "label": "AsyncLocalStorage import",
+      "old": "import crypto from \"node:crypto\";\nimport { spawn } from \"node:child_process\";",
+      "new": "import crypto from \"node:crypto\";\nimport { AsyncLocalStorage } from \"node:async_hooks\";\nimport { spawn } from \"node:child_process\";"
+    },
+    {
+      "type": "replace_exact",
+      "label": "path containment import",
+      "old": "import { assertRootGrantable, isDriveRoot, requiresExtraConfirmation, selectAccessRoot } from \"./desktop/access-policy.mjs\";",
+      "new": "import { assertRootGrantable, isDriveRoot, pathIsWithinRoot, requiresExtraConfirmation, selectAccessRoot } from \"./desktop/access-policy.mjs\";"
+    },
+    {
+      "type": "replace_exact_fragment",
+      "label": "one-time capability constants",
+      "old": "const TEMP_ACCESS_TTL_MS = 15 * 60_000;\nconst ACCESS_REQUEST_TTL_MS = 3 * 60_000;\nconst accessRequests = new Map();",
+      "fragment": "constants.fragment.txt"
+    },
+    {
+      "type": "replace_exact",
+      "label": "protect maintenance entrypoints",
+      "old": "  path.join(here, \"desktop\", \"subagent-process-tools.mjs\"),\n];",
+      "new": "  path.join(here, \"desktop\", \"subagent-process-tools.mjs\"),\n  path.join(here, \"desktop\", \"local-security-maintenance.mjs\"),\n  path.join(here, \"desktop\", \"main.mjs\"),\n  path.join(here, \"desktop\", \"preload.mjs\"),\n  path.join(here, \"desktop\", \"renderer\", \"src\", \"main.js\"),\n  path.join(here, \"desktop\", \"artifact-ui-client.js\"),\n  path.join(here, \"desktop\", \"artifact-ui-client.bundle.js\"),\n  path.join(here, \"desktop\", \"artifact-ui.mjs\"),\n  path.join(here, \"deep-coding-agent.mjs\"),\n  path.join(here, \"package.json\"),\n  path.join(here, \"package-lock.json\"),\n  path.join(here, \"forge.config.cjs\"),\n  path.join(here, \"vite.backend.config.mjs\"),\n  path.join(here, \"vite.renderer.config.mjs\"),\n  path.join(here, \"start-mcp.ps1\"),\n  path.join(here, \"start-private-mcp.ps1\"),\n  path.join(here, \"restart-mcp-worker.mjs\"),\n  path.join(here, \"stop-previous-mcp.ps1\"),\n  path.join(here, \"scripts\"),\n];"
+    },
+    {
+      "type": "replace_exact",
+      "label": "backend-enforced maintenance expiry",
+      "old": "function assertRemoteWriteAllowed(candidate) {\n  if (process.env.FORGELINK_LOCAL_SECURITY_MAINTENANCE === \"1\") return;\n  if (!isRemoteProtectedPath(candidate)) return;\n  const error = new Error(\"SECURITY_PROTECTED_PATH: ForgeLink security, policy, audit, and enforcement files are remote read-only. Enable local security maintenance mode to modify them.\");\n  error.code = \"SECURITY_PROTECTED_PATH\";\n  throw error;\n}",
+      "new": "function assertRemoteWriteAllowed(candidate) {\n  const maintenanceExpiresAt = Number(process.env.FORGELINK_LOCAL_SECURITY_MAINTENANCE_EXPIRES_AT);\n  const maintenanceActive = process.env.FORGELINK_LOCAL_SECURITY_MAINTENANCE === \"1\" && Number.isFinite(maintenanceExpiresAt) && maintenanceExpiresAt > Date.now();\n  if (maintenanceActive) return;\n  if (!isRemoteProtectedPath(candidate)) return;\n  const error = new Error(\"SECURITY_PROTECTED_PATH: ForgeLink security, policy, audit, and enforcement files are remote read-only. Enable a current local security-maintenance window to modify them.\");\n  error.code = \"SECURITY_PROTECTED_PATH\";\n  throw error;\n}"
+    },
+    {
+      "type": "replace_between_fragment",
+      "label": "capability-aware confinement",
+      "start": "function matchingRoot(candidate, requiredAccess = \"read\") {",
+      "end": "function insideRoot(candidate, requiredAccess = \"read\") {",
+      "fragment": "matching-root.fragment.txt"
+    },
+    {
+      "type": "replace_between_fragment",
+      "label": "one-time access lifecycle",
+      "start": "function pruneAccessRequests() {",
+      "end": "function safeEqual(a, b) {",
+      "fragment": "access-lifecycle.fragment.txt"
+    },
+    {
+      "type": "replace_between_fragment",
+      "label": "native npm project runner",
+      "start": "function projectTaskCommand(task, script) {",
+      "end": "async function runProjectTask(task, cwd, script, timeoutSeconds = 120) {",
+      "fragment": "npm-runner.fragment.txt"
+    },
+    {
+      "type": "replace_between_fragment",
+      "label": "MCP Apps one-time access tools",
+      "start": "  server.registerTool(\"request_path_access\", {",
+      "end": "  server.registerTool(\"backend_status\", {",
+      "fragment": "access-tools.fragment.txt"
+    },
+    {
+      "type": "replace_exact",
+      "label": "desktop pending request shape",
+      "old": ".map(({ id, path: requestedPath, access, justification, isDriveRoot, requiresExtraConfirmation, persistent, expiresAt }) => ({ id, path: requestedPath, access, justification, isDriveRoot, requiresExtraConfirmation, persistent, expiresAt }));",
+      "new": ".map(({ id, path: requestedPath, access, intendedTool, justification, isDriveRoot, requiresExtraConfirmation, expiresAt }) => ({ id, path: requestedPath, access, intendedTool, justification, isDriveRoot, requiresExtraConfirmation, expiresAt }));"
+    },
+    {
+      "type": "replace_exact",
+      "label": "desktop one-time resolve route",
+      "old": "    res.json(await resolvePathAccessRequest(req.params.id, req.body?.decision, req.body?.persistent === true));",
+      "new": "    res.json(await resolvePathAccessRequest(req.params.id, req.body?.decision));"
+    },
+    {
+      "type": "replace_exact_fragment",
+      "label": "ChatGPT maintenance desktop handoff endpoint",
+      "old": "dashboardApp.get(\"/dashboard/api/logs\", async (req, res) => {",
+      "fragment": "maintenance-dashboard.fragment.txt"
+    }
+  ],
+  "configMigration": {
+    "removeDriveRoots": true,
+    "retainWorkspaceOnly": true,
+    "addWorkspaceRoot": true,
+    "fullTerminalToGuarded": true
+  }
+}

@@ -6,6 +6,14 @@ export function normalizeTerminalMode(value) {
   return ['off', 'safe', 'full'].includes(value) ? value : 'off';
 }
 
+export function normalizeSystemControlMode(value) {
+  return ['off', 'read', 'full'].includes(value) ? value : 'off';
+}
+
+export function normalizeAutomationMode(value) {
+  return ['off', 'headless'].includes(value) ? value : 'off';
+}
+
 export function maskTunnelId(value) {
   const id = String(value || '');
   return id ? `${id.slice(0, 12)}…${id.slice(-4)}` : 'Not configured';

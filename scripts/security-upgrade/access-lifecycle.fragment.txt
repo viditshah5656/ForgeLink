@@ -1,0 +1,360 @@
+function hashAccessCapability(token) {
+  return crypto.createHash("sha256").update(String(token)).digest("hex");
+}
+
+function pruneAccessCapabilities() {
+  const now = Date.now();
+  for (const [hash, capability] of accessCapabilities) {
+    if (capability.status !== "active" || capability.expiresAt <= now) {
+      accessCapabilities.delete(hash);
+    }
+  }
+}
+
+function issueAccessCapability(request, grantedAccess) {
+  pruneAccessCapabilities();
+  const capabilityToken = randomToken(32);
+  const capability = {
+    requestId: request.id,
+    root: request.path,
+    access: grantedAccess,
+    intendedTool: request.intendedTool,
+    status: "active",
+    createdAt: Date.now(),
+    expiresAt: Date.now() + ONE_TIME_ACCESS_CAPABILITY_TTL_MS,
+  };
+  accessCapabilities.set(hashAccessCapability(capabilityToken), capability);
+  return { capabilityToken, capability };
+}
+
+function claimAccessCapability(capabilityToken, toolName) {
+  pruneAccessCapabilities();
+  const hash = hashAccessCapability(capabilityToken);
+  const capability = accessCapabilities.get(hash);
+  if (!capability || capability.status !== "active" || capability.expiresAt <= Date.now()) {
+    throw new Error("ONE_TIME_ACCESS_EXPIRED: capability is invalid, expired, or already consumed.");
+  }
+  if (capability.intendedTool !== toolName) {
+    throw new Error("ONE_TIME_ACCESS_TOOL_MISMATCH: capability is bound to " + capability.intendedTool + ", not " + toolName + ".");
+  }
+
+  capability.status = "consumed";
+  capability.consumedAt = Date.now();
+  accessCapabilities.delete(hash);
+
+  const request = accessRequests.get(capability.requestId);
+  if (request) {
+    request.status = "consumed";
+    request.consumedAt = capability.consumedAt;
+    delete request.capabilityToken;
+  }
+  return capability;
+}
+
+function pruneAccessRequests() {
+  const now = Date.now();
+  accessSettings.temporaryGrants = accessSettings.temporaryGrants.filter((grant) => grant.expiresAt > now);
+  pruneAccessCapabilities();
+  recentAccessRequestTimes = recentAccessRequestTimes.filter((timestamp) => now - timestamp < 10 * 60_000);
+
+  for (const [id, request] of accessRequests) {
+    if (request.status === "pending" && request.expiresAt <= now) request.status = "expired";
+    if (request.status === "approved" && request.capabilityExpiresAt <= now) {
+      request.status = "expired";
+      delete request.capabilityToken;
+    }
+    if (request.status !== "pending" && now - request.createdAt > 15 * 60_000) {
+      accessRequests.delete(id);
+    }
+  }
+}
+
+async function createPathAccessRequest(requestedPath, access, justification, intendedTool) {
+  if (ACCESS_PROMPT_TOKEN.length < 32) {
+    throw new Error("ChatGPT can request new folders only while the ForgeLink desktop app is running.");
+  }
+  if (!path.isAbsolute(requestedPath)) {
+    throw new Error("Request an absolute folder path so the owner can approve the exact location.");
+  }
+  if (!ONE_TIME_ACCESS_ALLOWED_TOOLS.has(String(intendedTool || ""))) {
+    throw new Error("One-time folder access is limited to supported filesystem tools. It never enables terminal, project-process, Windows-control, approval, restart, or safety tools.");
+  }
+
+  const target = await fsp.realpath(path.resolve(requestedPath));
+  checkWindowsPathSecurity(target);
+  if (IS_WINDOWS && target.startsWith("\\\\")) {
+    throw new Error("Network shares cannot be granted through this local-computer permission flow.");
+  }
+  if (!(await fsp.stat(target)).isDirectory()) {
+    throw new Error("Request a folder, not a file. To reach one file, request its containing folder.");
+  }
+
+  const existingGrant = matchingRoot(target, access === "read_write" ? "write" : "read");
+  if (existingGrant) {
+    return { status: "already_allowed", path: target, access, intendedTool };
+  }
+
+  pruneAccessRequests();
+  const targetKey = IS_WINDOWS ? target.toLowerCase() : target;
+  const duplicate = [...accessRequests.values()].find((request) =>
+    request.status === "pending" &&
+    (IS_WINDOWS ? request.path.toLowerCase() : request.path) === targetKey &&
+    request.access === access &&
+    request.intendedTool === intendedTool
+  );
+  if (duplicate) {
+    return {
+      status: "pending",
+      requestId: duplicate.id,
+      expiresAt: new Date(duplicate.expiresAt).toISOString(),
+      path: target,
+      access,
+      intendedTool,
+      justification: duplicate.justification,
+      isDriveRoot: duplicate.isDriveRoot,
+      requiresExtraConfirmation: duplicate.requiresExtraConfirmation,
+    };
+  }
+
+  if ([...accessRequests.values()].some((request) => request.status === "pending")) {
+    throw new Error("Another filesystem permission request is already waiting for approval.");
+  }
+  if (recentAccessRequestTimes.length >= 5) {
+    throw new Error("Too many filesystem permission prompts were requested. Wait ten minutes before requesting more.");
+  }
+
+  const id = randomToken(18);
+  const now = Date.now();
+  const request = {
+    id,
+    path: target,
+    access,
+    intendedTool,
+    justification: String(justification || "ForgeLink needs this folder to complete the current request.").trim().slice(0, 240),
+    isDriveRoot: isDriveRoot(target),
+    requiresExtraConfirmation: requiresExtraConfirmation(target),
+    status: "pending",
+    createdAt: now,
+    expiresAt: now + ACCESS_REQUEST_TTL_MS,
+  };
+
+  accessRequests.set(id, request);
+  recentAccessRequestTimes.push(now);
+  await writeAudit("access.requested", {
+    path: target,
+    access,
+    intendedTool,
+    isDriveRoot: request.isDriveRoot,
+    oneTime: true,
+  });
+
+  return {
+    status: "pending",
+    requestId: id,
+    expiresAt: new Date(request.expiresAt).toISOString(),
+    path: target,
+    access,
+    intendedTool,
+    justification: request.justification,
+    isDriveRoot: request.isDriveRoot,
+    requiresExtraConfirmation: request.requiresExtraConfirmation,
+  };
+}
+
+function accessRequestStatus(id) {
+  pruneAccessRequests();
+  const request = accessRequests.get(id);
+  if (!request) return { status: "not_found_or_expired" };
+
+  return {
+    status: request.status,
+    requestId: request.id,
+    path: request.path,
+    access: request.grantedAccess || request.access,
+    intendedTool: request.intendedTool,
+    justification: request.justification,
+    isDriveRoot: request.isDriveRoot,
+    requiresExtraConfirmation: request.requiresExtraConfirmation,
+    ...(request.status === "approved" ? { capabilityToken: request.capabilityToken } : {}),
+    expiresAt: request.status === "approved"
+      ? new Date(request.capabilityExpiresAt).toISOString()
+      : new Date(request.expiresAt).toISOString(),
+  };
+}
+
+async function resolvePathAccessRequest(id, decision) {
+  pruneAccessRequests();
+  const request = accessRequests.get(id);
+  if (!request || request.status !== "pending") {
+    throw new Error("That access request is no longer waiting for approval.");
+  }
+
+  if (decision === "deny") {
+    request.status = "denied";
+    await writeAudit("access.denied", {
+      path: request.path,
+      access: request.access,
+      intendedTool: request.intendedTool,
+      isDriveRoot: request.isDriveRoot,
+    });
+    return { accessRequest: accessRequestStatus(id) };
+  }
+
+  let grantedAccess;
+  if (decision === "allow_once") grantedAccess = request.access;
+  else if (decision === "read" || decision === "read_write") grantedAccess = decision;
+  else throw new Error("Choose allow_once or deny.");
+
+  if (grantedAccess === "read_write" && request.access !== "read_write") {
+    throw new Error("This request did not ask for write access.");
+  }
+
+  const issued = issueAccessCapability(request, grantedAccess);
+  request.status = "approved";
+  request.grantedAccess = grantedAccess;
+  request.capabilityToken = issued.capabilityToken;
+  request.capabilityExpiresAt = issued.capability.expiresAt;
+
+  await writeAudit("access.granted_once", {
+    path: request.path,
+    access: grantedAccess,
+    intendedTool: request.intendedTool,
+    isDriveRoot: request.isDriveRoot,
+    uses: 1,
+    ttlSeconds: Math.round(ONE_TIME_ACCESS_CAPABILITY_TTL_MS / 1000),
+  });
+
+  return {
+    accessRequest: accessRequestStatus(id),
+    capabilityToken: issued.capabilityToken,
+    intendedTool: request.intendedTool,
+    expiresAt: new Date(issued.capability.expiresAt).toISOString(),
+  };
+}
+
+function securityMaintenanceRuntimeStatus() {
+  const rawExpiresAt = Number(process.env.FORGELINK_LOCAL_SECURITY_MAINTENANCE_EXPIRES_AT);
+  const active = process.env.FORGELINK_LOCAL_SECURITY_MAINTENANCE === "1"
+    && Number.isFinite(rawExpiresAt)
+    && rawExpiresAt > Date.now();
+  return {
+    active,
+    expiresAt: active ? new Date(rawExpiresAt).toISOString() : null,
+    remainingMs: active ? Math.max(0, rawExpiresAt - Date.now()) : 0,
+    source: active ? "local-desktop-enforcer" : null,
+  };
+}
+
+function pruneSecurityMaintenanceRequests() {
+  const now = Date.now();
+  recentSecurityMaintenanceRequestTimes = recentSecurityMaintenanceRequestTimes
+    .filter((timestamp) => now - timestamp < 10 * 60_000);
+
+  for (const [id, request] of securityMaintenanceRequests) {
+    if (request.status === "pending" && request.expiresAt <= now) request.status = "expired";
+    if (request.status === "approved" && request.approvalExpiresAt <= now) request.status = "expired";
+    if (request.status !== "pending" && request.status !== "approved" && now - request.createdAt > 15 * 60_000) {
+      securityMaintenanceRequests.delete(id);
+    }
+  }
+}
+
+function securityMaintenanceRequestStatus(id) {
+  pruneSecurityMaintenanceRequests();
+  const request = securityMaintenanceRequests.get(id);
+  if (!request) return { status: "not_found_or_expired" };
+  return {
+    requestId: request.id,
+    status: request.status,
+    justification: request.justification,
+    durationMinutes: 15,
+    createdAt: new Date(request.createdAt).toISOString(),
+    expiresAt: new Date(
+      request.status === "approved" ? request.approvalExpiresAt : request.expiresAt
+    ).toISOString(),
+    approvedAt: request.approvedAt ? new Date(request.approvedAt).toISOString() : null,
+  };
+}
+
+async function createSecurityMaintenanceRequest(justification) {
+  const runtime = securityMaintenanceRuntimeStatus();
+  if (runtime.active) return { maintenance: runtime, status: "already_active" };
+  if (ACCESS_PROMPT_TOKEN.length < 32) {
+    throw new Error("Protected maintenance can be requested only while the ForgeLink desktop app and secure ChatGPT tunnel are running.");
+  }
+
+  pruneSecurityMaintenanceRequests();
+  const duplicate = [...securityMaintenanceRequests.values()]
+    .find((request) => request.status === "pending" || request.status === "approved");
+  if (duplicate) return { maintenanceRequest: securityMaintenanceRequestStatus(duplicate.id) };
+
+  if (recentSecurityMaintenanceRequestTimes.length >= 3) {
+    throw new Error("Too many protected-maintenance prompts were requested. Wait ten minutes before requesting another.");
+  }
+
+  const now = Date.now();
+  const request = {
+    id: randomToken(18),
+    status: "pending",
+    justification: String(justification || "A requested ForgeLink implementation requires a reviewed change to protected source.")
+      .trim()
+      .slice(0, 240),
+    createdAt: now,
+    expiresAt: now + SECURITY_MAINTENANCE_REQUEST_TTL_MS,
+    approvedAt: null,
+    approvalExpiresAt: null,
+  };
+  securityMaintenanceRequests.set(request.id, request);
+  recentSecurityMaintenanceRequestTimes.push(now);
+  await writeAudit("security.maintenance_requested", {
+    requestId: request.id,
+    durationMinutes: 15,
+    source: "chatgpt",
+  });
+  return { maintenanceRequest: securityMaintenanceRequestStatus(request.id) };
+}
+
+async function resolveSecurityMaintenanceRequest(id, decision) {
+  pruneSecurityMaintenanceRequests();
+  const request = securityMaintenanceRequests.get(id);
+  if (!request || request.status !== "pending") {
+    throw new Error("That protected-maintenance request is no longer waiting for approval.");
+  }
+
+  if (decision === "deny") {
+    request.status = "denied";
+    await writeAudit("security.maintenance_denied", {
+      requestId: request.id,
+      source: "chatgpt-owner-approval",
+    });
+    return { maintenanceRequest: securityMaintenanceRequestStatus(request.id) };
+  }
+  if (decision !== "allow") throw new Error("Choose allow or deny.");
+
+  const now = Date.now();
+  request.status = "approved";
+  request.approvedAt = now;
+  request.approvalExpiresAt = now + SECURITY_MAINTENANCE_APPROVAL_TTL_MS;
+  await writeAudit("security.maintenance_approved", {
+    requestId: request.id,
+    durationMinutes: 15,
+    source: "chatgpt-owner-approval",
+  });
+  return { maintenanceRequest: securityMaintenanceRequestStatus(request.id) };
+}
+
+function approvedSecurityMaintenanceRequestForDesktop() {
+  pruneSecurityMaintenanceRequests();
+  const request = [...securityMaintenanceRequests.values()]
+    .filter((item) => item.status === "approved" && item.approvalExpiresAt > Date.now())
+    .sort((left, right) => left.approvedAt - right.approvedAt)[0];
+  if (!request) return null;
+  return {
+    id: request.id,
+    status: request.status,
+    justification: request.justification,
+    durationMinutes: 15,
+    approvedAt: new Date(request.approvedAt).toISOString(),
+    approvalExpiresAt: new Date(request.approvalExpiresAt).toISOString(),
+  };
+}

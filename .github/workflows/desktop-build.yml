@@ -19,8 +19,13 @@ jobs:
         include:
           - os: windows-latest
             artifact: windows-installer
+            make-script: make:win
           - os: macos-14
             artifact: macos-installer
+            make-script: make:mac
+          - os: ubuntu-latest
+            artifact: linux-package
+            make-script: make:linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,14 +33,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Install Linux native build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3
       - run: npm ci
       - run: npm run lint:desktop
-      - run: npm run verify:desktop
-      - run: npm run make
+      - run: npm run verify:platforms
+      - run: npm run ${{ matrix.make-script }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: out/make/**/*
+          path: out/native-builds/**/*
           if-no-files-found: error

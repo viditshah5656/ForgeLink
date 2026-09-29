@@ -32,4 +32,4 @@ if (-not $Existing) {
 
 Write-Host "Opening the secure local setup wizard at $WizardUrl" -ForegroundColor Green
 Start-Process $WizardUrl
-Write-Host 'Complete the browser wizard. The local setup service closes itself after you start Local Files MCP.' -ForegroundColor Yellow
+Write-Host 'Complete the browser wizard. The local setup service closes itself after you start ForgeLink.' -ForegroundColor Yellow

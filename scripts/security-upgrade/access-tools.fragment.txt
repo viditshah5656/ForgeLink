@@ -1,0 +1,137 @@
+registerAppTool(server, "request_path_access", {
+    title: "Request one-time ForgeLink folder access",
+    icons: forgeLinkServerInfo().icons,
+    description: "Request one exact existing folder only after a filesystem operation is denied. The request is bound to one supported filesystem tool and never enables terminal/project-process access. The ForgeLink card asks the owner to Allow once or Deny. Persistent access cannot be requested by the model.",
+    inputSchema: {
+      path: z.string().min(1),
+      access: z.enum(["read", "read_write"]).optional().default("read"),
+      intendedTool: z.string().min(1).max(100),
+      justification: z.string().max(240).optional(),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    _meta: {
+      ...artifactAppCommon._meta,
+      ui: { resourceUri: ARTIFACT_UI_URI, visibility: ["model", "app"] },
+      "openai/outputTemplate": ARTIFACT_UI_URI,
+    },
+  }, async ({ path: requestedPath, access, intendedTool, justification }) => {
+    const accessRequest = await createPathAccessRequest(requestedPath, access, justification, intendedTool);
+    const structuredContent = { accessRequest };
+    return {
+      structuredContent,
+      content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
+    };
+  });
+
+  registerAppTool(server, "resolve_path_access_once", {
+    title: "Resolve ForgeLink one-time folder access",
+    description: "Owner-only MCP App action. Hidden from the model. Converts one pending request into a single-use capability or denial.",
+    inputSchema: {
+      requestId: z.string().min(20).max(100),
+      decision: z.enum(["allow_once", "deny"]),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    _meta: {
+      ...artifactAppCommon._meta,
+      ui: { resourceUri: ARTIFACT_UI_URI, visibility: ["app"] },
+      "openai/outputTemplate": ARTIFACT_UI_URI,
+    },
+  }, async ({ requestId, decision }) => {
+    const result = await resolvePathAccessRequest(requestId, decision);
+    return {
+      structuredContent: result,
+      content: [{ type: "text", text: JSON.stringify({ status: result.accessRequest?.status || "unknown" }) }],
+    };
+  });
+
+  server.registerTool("use_path_access_once", {
+    description: "Execute exactly one owner-approved filesystem tool with a short-lived capability delivered to the current chat. The capability is bound to one exact directory scope, access level, and intended filesystem tool, and it is consumed before execution. It cannot enable terminal, project-process, Windows-control, approval, restart, or safety tools.",
+    inputSchema: {
+      capabilityToken: z.string().min(32).max(200),
+      toolName: z.string().min(1).max(100),
+      arguments: z.record(z.any()).optional().default({}),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    ...common,
+  }, async ({ capabilityToken, toolName, arguments: toolArguments }) => {
+    if (!ONE_TIME_ACCESS_ALLOWED_TOOLS.has(toolName)) {
+      throw new Error("This tool is not eligible for one-time filesystem access.");
+    }
+
+    const targetHandler = registeredToolHandlers.get(toolName);
+    if (!targetHandler || toolName === "use_path_access_once") {
+      throw new Error("The bound filesystem tool is unavailable.");
+    }
+
+    const capability = claimAccessCapability(capabilityToken, toolName);
+    await writeAudit("access.capability_consumed", {
+      path: capability.root,
+      access: capability.access,
+      intendedTool: capability.intendedTool,
+      requestId: capability.requestId,
+    });
+
+    return await accessCapabilityContext.run(
+      capability,
+      async () => await targetHandler(toolArguments || {}),
+    );
+  });
+
+
+
+  registerAppTool(server, "request_security_maintenance", {
+    title: "Request ForgeLink protected maintenance",
+    icons: forgeLinkServerInfo().icons,
+    description: "Use only when the current task genuinely requires modifying ForgeLink protected runtime/security source. This tool can request a fixed 15-minute maintenance window but cannot approve or activate it. The owner must explicitly approve in the inline ForgeLink ChatGPT card.",
+    inputSchema: {
+      justification: z.string().min(10).max(240),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    _meta: {
+      ...artifactAppCommon._meta,
+      ui: { resourceUri: ARTIFACT_UI_URI, visibility: ["model", "app"] },
+      "openai/outputTemplate": ARTIFACT_UI_URI,
+    },
+  }, async ({ justification }) => {
+    const structuredContent = await createSecurityMaintenanceRequest(justification);
+    return {
+      structuredContent,
+      content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
+    };
+  });
+
+  registerAppTool(server, "resolve_security_maintenance", {
+    title: "Resolve ForgeLink protected maintenance",
+    description: "Owner-only MCP App action hidden from the model. Records the user's explicit ChatGPT approval or denial for one fixed 15-minute protected-source maintenance window. It does not directly mutate protected files.",
+    inputSchema: {
+      requestId: z.string().min(20).max(100),
+      decision: z.enum(["allow", "deny"]),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    _meta: {
+      ...artifactAppCommon._meta,
+      ui: { resourceUri: ARTIFACT_UI_URI, visibility: ["app"] },
+      "openai/outputTemplate": ARTIFACT_UI_URI,
+    },
+  }, async ({ requestId, decision }) => {
+    const structuredContent = await resolveSecurityMaintenanceRequest(requestId, decision);
+    return {
+      structuredContent,
+      content: [{ type: "text", text: JSON.stringify({ status: structuredContent.maintenanceRequest?.status || "unknown" }) }],
+    };
+  });
+
+  server.registerTool("security_maintenance_status", {
+    description: "Read whether the local ForgeLink desktop enforcer has actually activated an expiring protected-source maintenance window. This cannot enable, extend, or approve maintenance.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    ...common,
+  }, async () => textResult(JSON.stringify({ maintenance: securityMaintenanceRuntimeStatus() }, null, 2)));
+
+
+  server.registerTool("check_path_access_request", {
+    description: "Compatibility fallback for a one-time folder approval when a host cannot render the rich ForgeLink approval card. After owner approval this returns the short-lived single-use capability token for the current conversation. Never reuse it.",
+    inputSchema: { requestId: z.string().min(20).max(100) },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    ...common,
+  }, async ({ requestId }) => textResult(JSON.stringify(accessRequestStatus(requestId), null, 2)));

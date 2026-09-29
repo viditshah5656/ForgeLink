@@ -1,0 +1,25 @@
+function matchingRoot(candidate, requiredAccess = "read") {
+  accessSettings.temporaryGrants = accessSettings.temporaryGrants.filter((grant) => grant.expiresAt > Date.now());
+  const persistentRoots = [
+    ...accessSettings.allowedRoots.map((root) => ({ root, access: "read_write" })),
+    ...accessSettings.readOnlyRoots.map((root) => ({ root, access: "read" })),
+  ];
+  const direct = selectAccessRoot(candidate, persistentRoots, accessSettings.temporaryGrants, requiredAccess);
+  if (direct) return direct;
+
+  const capability = accessCapabilityContext.getStore();
+  if (
+    capability &&
+    capability.expiresAt > Date.now() &&
+    (requiredAccess !== "write" || capability.access === "read_write") &&
+    pathIsWithinRoot(capability.root, candidate)
+  ) {
+    return {
+      root: capability.root,
+      access: capability.access,
+      expiresAt: capability.expiresAt,
+      source: "one_time_capability",
+    };
+  }
+  return null;
+}

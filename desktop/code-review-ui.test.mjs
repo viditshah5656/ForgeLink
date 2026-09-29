@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import { CODE_REVIEW_UI_HTML, CODE_REVIEW_UI_URI, CODE_REVIEW_UI_LEGACY_URIS } from './code-review-ui.mjs';
+
+const directory = path.dirname(fileURLToPath(import.meta.url));
+const read = (name) => fs.readFileSync(path.join(directory, name), 'utf8');
+
+test('ChatGPT receives a focused changed-files app with a cache-busted resource', () => {
+  const client = read('code-review-ui-client.js');
+  const server = fs.readFileSync(path.join(directory, '..', 'server.mjs'), 'utf8');
+  assert.equal(CODE_REVIEW_UI_URI, 'ui://forgelink/code-review-v7.html');
+  assert.deepEqual(CODE_REVIEW_UI_LEGACY_URIS, ['ui://forgelink/code-review-v6.html', 'ui://forgelink/code-review-v5.html', 'ui://forgelink/code-review-v4.html', 'ui://forgelink/code-review-v3.html', 'ui://forgelink/code-review-v2.html', 'ui://forgelink/code-review-v1.html']);
+  assert.match(CODE_REVIEW_UI_HTML, /\.diff-line\.add\{background:var\(--green-bg\)/);
+  assert.match(CODE_REVIEW_UI_HTML, /\.diff-line\.remove\{background:var\(--red-bg\)/);
+  assert.match(CODE_REVIEW_UI_HTML, /\.focused-details/);
+  assert.match(CODE_REVIEW_UI_HTML, /\.review-link/);
+  assert.match(client, /requestDisplayMode\(\{ mode: 'fullscreen' \}\)/);
+  assert.match(client, /requestDisplayMode\(\{ mode: 'inline' \}\)/);
+  assert.match(client, /renderFocusedFile/);
+  assert.match(client, /files\.slice\(0, 3\)/);
+  assert.match(client, /Review changes/);
+  assert.match(client, /Collapse files/);
+  assert.doesNotMatch(client, /Click a file to review its exact changes/);
+  assert.doesNotMatch(client, /reviewExpanded/);
+  assert.match(client, /code_review_\$\{kind\}/);
+  assert.match(client, /across \$\{review\.operationCount\} operations/);
+  assert.match(server, /registerAppTool\(server, "code_change_review"/);
+  assert.match(server, /server\.registerTool\("transaction_commit"/);
+  const commitTool = server.split('server.registerTool("transaction_commit"')[1].split('server.registerTool("transaction_rollback"')[0];
+  assert.doesNotMatch(commitTool, /CODE_REVIEW_UI_URI|openai\/outputTemplate|\breview\s*[,}]/);
+  assert.match(server, /presentationMode: "workflow-review"/);
+  assert.match(server, /This workflow review was already presented/);
+  assert.match(server, /inputSchema: \{ protocolId: z\.string\(\)\.uuid\(\) \}/);
+  assert.match(client, /candidate\?\.presentationMode === 'workflow-review'/);
+  assert.match(server, /combineWorkflowCodeReviews/);
+  assert.match(server, /registerAppTool\(server, "code_review_presented"/);
+  assert.match(client, /name: 'code_review_presented'/);
+  assert.match(server, /buildCodeChangeReview\(\{ \.\.\.pending, status: "committed" \}/);
+  assert.match(server, /CODE_REVIEW_TRANSACTION_REQUIRED/);
+  assert.match(server, /assertTransactionForCodeMutation\(target, "edit_text_file"\)/);
+  assert.match(server, /buildCodeChangeReview\(record/);
+  assert.match(server, /registerAppTool\(server, `code_review_\$\{action\}`/);
+  assert.match(server, /visibility: \["app"\]/);
+});

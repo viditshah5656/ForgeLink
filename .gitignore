@@ -1,4 +1,11 @@
+# Dependencies and package-manager state
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build, bundle, cache and packaged output
 .vite/
 out/
 vendor/
@@ -6,22 +13,57 @@ dist-backend/
 desktop/renderer/dist/
 assets/generated/
 .desktop-backend-test/
+ForgeLink-plugin-*.zip
+*.dmg
+*.AppImage
+desktop/artifact-ui-client.bundle.js
+desktop/code-review-ui-client.bundle.js
+desktop/renderer/public/logo.png
+setup-web/branding-logo.png
+web/assets/branding-logo.png
 
-# Local configuration and credentials — never commit these.
+# Local ForgeLink configuration and credentials — never commit these.
 .env
+.env.*
+!.env.example
 .oauth-clients.json
 .oauth-tokens.json
+.chatgpt-permission-requests.json
+.chatgpt-permission-requests.json.*.tmp
 .current-tunnel-url
 openai-tunnel.env
 access-config.json
+project-registry.json
+project-registry.json.tmp-*
+project-index.json
+project-index.json.*.tmp
 desktop-config.json
 desktop-secrets.json
+cloudflare-tunnel-token.dpapi
+cloudflare-named.json
+*.dpapi
+
+# Runtime state, recovery journals and local agent/session data
+recovery/
+regressions/
+web-subagents/
+native-agent-runtime/
+engineering/
+presentation-artifacts/
+provider-swarms/
+.backend-restart-status.json
+job-processes.json
+job-processes.json.*.tmp
+terminal-processes.json
+terminal-processes.json.*.tmp
+agent-audit.jsonl
+safety-events.jsonl
 tunnel-client-data/
 
 # Runtime binaries are downloaded and checksum-verified by setup.
 bin/
 
-# Local logs and test captures.
+# Local logs, test captures and one-off diagnostics
 *.log
 *.err.log
 dashboard-test*.png
@@ -30,11 +72,20 @@ mobile-test*.png
 security-test.png
 terminal-test.png
 setup-wizard-test.png
-agent-audit.jsonl
-cloudflare-tunnel-token.dpapi
-cloudflare-named.json
+.tmp-*
+_tmp*
+tmp-*
+tmp-cdp.cjs
+.ui-audit/
+.forgelink-read-journal.mjs
+*.before-rollback
+console.error(e))
+r.text()).then(console.log)
+chatgpt-logo.png
+$null
 
-# Editor and OS state.
+# Editor and OS state
 .DS_Store
 Thumbs.db
 .vscode/
+.idea/

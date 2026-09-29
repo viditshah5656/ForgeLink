@@ -16,6 +16,8 @@ const profileFile = path.join(profileDir, "local-files.yaml");
 const keyFile = path.join(dataDir, "api-key.dpapi");
 const clientFile = path.join(here, "bin", "tunnel-client.exe");
 const accessFile = path.join(here, "access-config.json");
+const cloudflareFile = path.join(here, "cloudflare-named.json");
+const cloudflareTokenFile = path.join(here, "cloudflare-tunnel-token.dpapi");
 
 function safeMessage(error) {
   return String(error?.message || error || "Unknown error")
@@ -103,6 +105,26 @@ async function configuredState() {
   return { configured: Boolean(tunnelId && fs.existsSync(keyFile) && roots.length), roots, tunnelIdMasked: tunnelId ? `${tunnelId.slice(0, 12)}…${tunnelId.slice(-4)}` : null, terminalEnabled };
 }
 
+async function cloudflareState() {
+  let hostname = null;
+  try { hostname = JSON.parse(await fsp.readFile(cloudflareFile, "utf8")).hostname || null; } catch {}
+  return { hostname, configured: Boolean(hostname && fs.existsSync(cloudflareTokenFile)) };
+}
+
+async function saveAccessConfiguration(body) {
+  const roots = [];
+  for (const value of Array.isArray(body?.roots) ? body.roots : []) roots.push(await validateFolder(value));
+  const uniqueRoots = [...new Map(roots.map((item) => [item.toLowerCase(), item])).values()];
+  if (!uniqueRoots.length) throw new Error("Add at least one coding folder");
+  const terminalEnabled = body?.terminalEnabled === true;
+  const env = `# Local-only settings. Never commit this file.\nALLOWED_ROOT=${uniqueRoots[0]}\nPORT=24024\nDASHBOARD_PORT=24025\nOAUTH_LOGIN_PASSWORD=${crypto.randomBytes(32).toString("base64url")}\n`;
+  await Promise.all([
+    fsp.writeFile(accessFile, `${JSON.stringify({ allowedRoots: uniqueRoots, terminalEnabled }, null, 2)}\n`, { mode: 0o600 }),
+    fsp.writeFile(path.join(here, ".env"), env, { mode: 0o600 }),
+  ]);
+  return { uniqueRoots, terminalEnabled };
+}
+
 const progress = { stage: "idle", message: "Ready", error: null };
 const app = express();
 app.disable("x-powered-by");
@@ -179,7 +201,7 @@ app.post("/api/start", async (_req, res) => {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     if (!ready) throw new Error("The tunnel did not become ready within 45 seconds. Open start-mcp.ps1 manually to see diagnostics.");
-    progress.stage = "running"; progress.message = "Local Files MCP is online.";
+    progress.stage = "running"; progress.message = "ForgeLink is online.";
     setTimeout(() => process.exit(0), 1500).unref();
     res.json({ ok: true, dashboard: "http://127.0.0.1:24025/dashboard/" });
   } catch (error) { progress.stage = "error"; progress.error = safeMessage(error); res.status(400).json({ error: safeMessage(error) }); }

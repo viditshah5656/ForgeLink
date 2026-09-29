@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isValidTunnelId, maskTunnelId, normalizeTerminalMode, redactSensitive } from './shared.mjs';
+import { isValidTunnelId, maskTunnelId, normalizeTerminalMode, normalizeSystemControlMode, normalizeAutomationMode, redactSensitive } from './shared.mjs';
 
 const tunnelId = `tunnel_${'0'.repeat(32)}`;
 
@@ -13,6 +13,12 @@ test('validates exact OpenAI tunnel identifiers', () => {
 test('normalizes permission modes to the safest default', () => {
   assert.equal(normalizeTerminalMode('safe'), 'safe');
   assert.equal(normalizeTerminalMode('anything'), 'off');
+  assert.equal(normalizeSystemControlMode('read'), 'read');
+  assert.equal(normalizeSystemControlMode('full'), 'full');
+  assert.equal(normalizeSystemControlMode('anything'), 'off');
+  assert.equal(normalizeAutomationMode('headless'), 'headless');
+  assert.equal(normalizeAutomationMode('full'), 'off');
+  assert.equal(normalizeAutomationMode('anything'), 'off');
 });
 
 test('masks identifiers and redacts credentials from errors', () => {

@@ -1,10 +1,12 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$LocalOnly,
-    [switch]$QuickPublic
+    [switch]$QuickPublic,
+    [switch]$Stop,
+    [string]$BootstrapFile
 )
 
-if (-not $LocalOnly -and -not $QuickPublic) {
+if (-not $Stop -and -not $LocalOnly -and -not $QuickPublic) {
     $StableLauncher = Join-Path $PSScriptRoot 'start-secure-tunnel.ps1'
     $StableProfile = Join-Path $PSScriptRoot 'tunnel-client-data\profiles\local-files.yaml'
     $StableKey = Join-Path $PSScriptRoot 'tunnel-client-data\api-key.dpapi'
@@ -16,30 +18,70 @@ if (-not $LocalOnly -and -not $QuickPublic) {
 }
 
 $ErrorActionPreference = 'Stop'
+
+# The desktop's localhost-only backend runs under the signed-in user's token;
+# folder permissions still follow Windows ACLs. Public tunnel modes continue
+# to require explicit elevation for full-computer access.
+$CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$CurrentPrincipal = [Security.Principal.WindowsPrincipal]::new($CurrentIdentity)
+if (-not ($LocalOnly -or $Stop) -and -not $CurrentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $PowerShellExe = Join-Path $PSHOME 'powershell.exe'
+    $ElevatedArgs = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $PSCommandPath
+    if ($LocalOnly) { $ElevatedArgs += ' -LocalOnly' }
+    if ($QuickPublic) { $ElevatedArgs += ' -QuickPublic' }
+    if ($Stop) { $ElevatedArgs += ' -Stop' }
+    if ($BootstrapFile) { $ElevatedArgs += (' -BootstrapFile "{0}"' -f $BootstrapFile.Replace('"', '""')) }
+    $ElevatedWindowStyle = if ($LocalOnly -or $Stop) { 'Hidden' } else { 'Normal' }
+    try {
+        $ElevatedProcess = Start-Process -FilePath $PowerShellExe -Verb RunAs -WindowStyle $ElevatedWindowStyle -WorkingDirectory $PSScriptRoot -ArgumentList $ElevatedArgs -PassThru -Wait
+    } catch {
+        throw 'ForgeLink needs Windows administrator approval for full-computer access. Approve the UAC prompt and start it again.'
+    }
+    exit $ElevatedProcess.ExitCode
+}
+
+if ($BootstrapFile) {
+    if (-not (Test-Path -LiteralPath $BootstrapFile)) { throw 'ForgeLink runtime bootstrap data was not found.' }
+    $Bootstrap = Get-Content -LiteralPath $BootstrapFile -Raw -Encoding utf8 | ConvertFrom-Json
+    foreach ($Property in $Bootstrap.PSObject.Properties) {
+        if ($null -ne $Property.Value) {
+            Set-Item -Path ("Env:" + $Property.Name) -Value ([string]$Property.Value)
+        }
+    }
+    Remove-Item -LiteralPath $BootstrapFile -Force -ErrorAction SilentlyContinue
+}
+
 $SetupDir = $PSScriptRoot
-$EnvFile = Join-Path $SetupDir '.env'
+$DisableSelectionScript = Join-Path $SetupDir 'scripts\disable-console-selection.ps1'
+if (($LocalOnly -or $QuickPublic) -and (Test-Path -LiteralPath $DisableSelectionScript)) {
+    . $DisableSelectionScript
+}
+$EnvFile = if ($env:FORGELINK_ENV_FILE) { $env:FORGELINK_ENV_FILE } elseif ($env:MCP_DATA_DIR) { Join-Path $env:MCP_DATA_DIR '.env' } else { Join-Path $SetupDir '.env' }
 $TunnelOut = Join-Path $SetupDir 'cloudflared.log'
 $TunnelErr = Join-Path $SetupDir 'cloudflared.err.log'
 $CurrentUrlFile = Join-Path $SetupDir '.current-tunnel-url'
-$ServerScript = Join-Path $SetupDir 'server.mjs'
-
-# Replace only a stale instance of this exact server. Never take a port from an
-# unrelated process.
-$PortOwner = Get-NetTCPConnection -LocalPort 24024 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($PortOwner) {
-    $OwnerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($PortOwner.OwningProcess)" -ErrorAction SilentlyContinue
-    $ExpectedScript = $ServerScript.Replace('\', '\\')
-    if ($OwnerProcess.Name -eq 'node.exe' -and $OwnerProcess.CommandLine -like "*$ServerScript*") {
-        Stop-Process -Id $OwnerProcess.ProcessId -Force
-        $Deadline = (Get-Date).AddSeconds(5)
-        while ((Get-Date) -lt $Deadline -and (Get-NetTCPConnection -LocalPort 24024 -State Listen -ErrorAction SilentlyContinue)) {
-            Start-Sleep -Milliseconds 100
-        }
-    } else {
-        throw "Port 24024 is already used by PID $($PortOwner.OwningProcess) ($($OwnerProcess.Name)). Refusing to stop an unrelated process."
-    }
+$ServerScript = if ($env:FORGELINK_SERVER_SCRIPT) {
+    [IO.Path]::GetFullPath($env:FORGELINK_SERVER_SCRIPT)
+} elseif (Test-Path -LiteralPath (Join-Path $SetupDir 'server.mjs')) {
+    Join-Path $SetupDir 'server.mjs'
+} elseif (Test-Path -LiteralPath (Join-Path $SetupDir 'backend-entry.mjs')) {
+    Join-Path $SetupDir 'backend-entry.mjs'
+} else {
+    throw 'ForgeLink backend entry script was not found.'
 }
+$env:FORGELINK_SERVER_SCRIPT = $ServerScript
+$NodeExe = if ($env:FORGELINK_NODE_EXE) { [IO.Path]::GetFullPath($env:FORGELINK_NODE_EXE) } else { 'node' }
 
+$StopScript = Join-Path $SetupDir 'stop-previous-mcp.ps1'
+if ($Stop) {
+    & $StopScript -BackendOnly
+    exit $LASTEXITCODE
+}
+if ($LocalOnly) {
+    & $StopScript -BackendOnly
+} else {
+    & $StopScript
+}
 if (-not (Test-Path -LiteralPath $EnvFile)) {
     $RandomBytes = [byte[]]::new(32)
     $Rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -58,10 +100,17 @@ $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 if ($LASTEXITCODE -ne 0) { throw 'Could not restrict permissions on .env' }
 
 if ($LocalOnly) {
-    & node $ServerScript '--public-url=http://localhost:24024'
+    $ServerArgs = @($ServerScript, '--public-url=http://localhost:24024')
+    if ($env:FORGELINK_SERVER_OUT -and $env:FORGELINK_SERVER_ERR) {
+        $ServerOut = $env:FORGELINK_SERVER_OUT
+        $ServerErr = $env:FORGELINK_SERVER_ERR
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ServerOut) | Out-Null
+        & $NodeExe @ServerArgs 1>> $ServerOut 2>> $ServerErr
+    } else {
+        & $NodeExe @ServerArgs
+    }
     exit $LASTEXITCODE
 }
-
 Remove-Item -LiteralPath $TunnelOut, $TunnelErr, $CurrentUrlFile -Force -ErrorAction SilentlyContinue
 $StaleTunnels = Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*tunnel --url http://127.0.0.1:24024*' }
 foreach ($StaleTunnel in $StaleTunnels) { Stop-Process -Id $StaleTunnel.ProcessId -Force -ErrorAction SilentlyContinue }

@@ -29,6 +29,14 @@ const icons = {
 function icon(name, cls = '') { return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.code}</svg>`; }
 
 const page = document.body.dataset.page || 'overview';
+const BRANDING_FALLBACK = {
+  name: 'ForgeLink',
+  developer: 'Vidit Shah',
+  productName: 'ForgeLink by Vidit Shah',
+  shortDescription: 'Private local computer bridge for ChatGPT',
+  logoAsset: 'branding-logo.png',
+};
+let branding = { ...BRANDING_FALLBACK };
 const nav = [
   ['overview', 'Overview', 'index.html'],
   ['files', 'Files', 'files.html'],
@@ -39,7 +47,7 @@ const nav = [
 ];
 
 $('#sidebar').innerHTML = `
-  <a class="brand" href="index.html"><span class="brand-mark"></span><span><strong>Local Files</strong><span>MCP Control Center</span></span></a>
+  <a class="brand" href="index.html"><img class="brand-logo" data-brand-logo alt=""><span><strong data-brand-name>ForgeLink</strong><span data-brand-subtitle>Local MCP Control Center</span></span></a>
   <div class="nav-label">Workspace</div>
   <nav class="nav">${nav.map(([id, label, href]) => `<a class="nav-link ${page === id ? 'active' : ''}" href="${href}">${icon(id)}<span>${label}</span></a>`).join('')}</nav>
   <div class="sidebar-bottom">
@@ -48,7 +56,7 @@ $('#sidebar').innerHTML = `
   </div>`;
 
 $('#topbar').innerHTML = `
-  <div style="display:flex;align-items:center;gap:11px"><button class="icon-button mobile-menu" id="menuButton" aria-label="Open menu">${icon('menu')}</button><span class="eyebrow">Local Files / ${nav.find(x => x[0] === page)?.[1]}</span></div>
+  <div style="display:flex;align-items:center;gap:11px"><button class="icon-button mobile-menu" id="menuButton" aria-label="Open menu">${icon('menu')}</button><span class="eyebrow"><span data-brand-name>ForgeLink</span> / ${nav.find(x => x[0] === page)?.[1]}</span></div>
   <div class="topbar-actions"><button class="icon-button" id="refreshButton" aria-label="Refresh">${icon('refresh')}</button><button class="icon-button" id="themeButton" aria-label="Change theme"></button></div>`;
 
 const storedTheme = localStorage.getItem('mcp-theme');
@@ -65,7 +73,18 @@ document.addEventListener('click', e => { if (innerWidth <= 820 && document.body
 addEventListener('scroll', () => $('#topbar').classList.toggle('scrolled', scrollY > 4), { passive: true });
 
 let status;
+function applyBranding() {
+  document.title = `${branding.name} · ${nav.find(x => x[0] === page)?.[1] || 'Dashboard'}`;
+  $$('[data-brand-name]').forEach(el => { el.textContent = branding.name; });
+  $$('[data-brand-subtitle]').forEach(el => { el.textContent = `${branding.developer} · MCP Control Center`; });
+  $$('[data-brand-logo]').forEach(el => { el.src = branding.logoAsset; el.alt = `${branding.name} logo`; });
+}
 async function fetchJSON(url) { const response = await fetch(url); const data = await response.json(); if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`); return data; }
+async function loadBranding() {
+  try { branding = { ...branding, ...(await fetchJSON('assets/branding.json')) }; applyBranding(); } catch {}
+}
+applyBranding();
+loadBranding();
 async function loadStatus() {
   try {
     status = await fetchJSON('api/status');
@@ -136,13 +155,13 @@ async function initLogs() {
 
 async function initFolderManager() {
   const list = $('#rootList'); if (!list) return;
-  async function refresh() { const data = await fetchJSON('api/status'); render(data.roots); }
-  function render(roots) {
+  async function refresh() { const data = await fetchJSON('api/status'); render(data.roots, data.readOnlyRoots || []); }
+  function render(roots, readOnlyRoots = []) {
     $('#rootCount').textContent = `${roots.length} folder${roots.length === 1 ? '' : 's'}`;
-    list.innerHTML = roots.map((root, index) => `<div class="root-row"><span class="metric-icon">${icon('folder')}</span><div><strong>${escapeHTML(root)}</strong><span>${index === 0 ? 'Primary folder · relative paths start here' : 'Additional allowed folder'}</span></div><button class="button secondary root-remove" data-root="${escapeAttr(root)}" ${roots.length === 1 ? 'disabled' : ''}>Remove</button></div>`).join('');
+    list.innerHTML = roots.map((root, index) => `<div class="root-row"><span class="metric-icon">${icon('folder')}</span><div><strong>${escapeHTML(root)}</strong><span>${readOnlyRoots.some(item => item.toLowerCase() === root.toLowerCase()) ? 'Permanent · read-only' : index === 0 ? 'Permanent · read and modify · primary folder' : 'Permanent · read and modify'}</span></div><button class="button secondary root-remove" data-root="${escapeAttr(root)}" ${roots.length === 1 ? 'disabled' : ''}>Remove</button></div>`).join('');
     $$('.root-remove', list).forEach(button => button.addEventListener('click', async () => { if (!confirm(`Remove ${button.dataset.root} from ChatGPT access? Files will not be deleted.`)) return; try { await fetchJSONWithBody('api/roots', 'DELETE', { path: button.dataset.root }); toast('Folder access removed'); await refresh(); loadStatus(); } catch(e) { toast(e.message); } }));
   }
-  $('#addRootForm').addEventListener('submit', async e => { e.preventDefault(); const input=$('#rootInput'); try { const result=await fetchJSONWithBody('api/roots','POST',{path:input.value.trim()}); input.value=''; render(result.roots); toast('Folder added to ChatGPT access'); loadStatus(); } catch(error) { toast(error.message); } });
+  $('#addRootForm').addEventListener('submit', async e => { e.preventDefault(); const input=$('#rootInput'); try { const result=await fetchJSONWithBody('api/roots','POST',{path:input.value.trim()}); input.value=''; render(result.roots, result.readOnlyRoots || []); toast('Folder added to ChatGPT access'); loadStatus(); } catch(error) { toast(error.message); } });
   refresh();
 }
 
