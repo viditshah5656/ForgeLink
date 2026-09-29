@@ -9,7 +9,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -33,17 +33,74 @@ jobs:
         with:
           node-version: 24
           cache: npm
+
       - name: Install Linux native build prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential python3
+
       - run: npm ci
       - run: npm run lint:desktop
       - run: npm run verify:platforms
-      - run: npm run ${{ matrix.make-script }}
+
+      - name: Build native installer
+        run: npm run ${{ matrix.make-script }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/upload-artifact@v4
+
+      - name: Stage Windows installer and checksum
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+
+          $setup = Get-ChildItem -Path out/native-builds -Recurse -File -Filter "ForgeLink-Setup.exe" |
+            Select-Object -First 1
+
+          if (-not $setup) {
+            throw "ForgeLink-Setup.exe was not produced by Electron Forge."
+          }
+
+          Copy-Item $setup.FullName "release/ForgeLink-Setup.exe" -Force
+
+          $hash = (Get-FileHash "release/ForgeLink-Setup.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ForgeLink-Setup.exe" | Set-Content "release/ForgeLink-Setup.exe.sha256" -Encoding ascii
+
+          $version = node -p "require('./package.json').version"
+          "FORGELINK_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          Write-Host "Staged ForgeLink Windows installer version $version"
+          Write-Host "SHA256: $hash"
+
+      - name: Upload Windows installer artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload native build artifact
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: out/native-builds/**/*
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish Windows installer to GitHub Release
+        if: runner.os == 'Windows' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "v$env:FORGELINK_VERSION"
+          $title = "ForgeLink $env:FORGELINK_VERSION"
+
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo "${{ github.repository }}" --target "$env:GITHUB_SHA" --title $title --notes "ForgeLink desktop release. Windows installer built natively on GitHub Actions from commit $env:GITHUB_SHA."
+          }
+
+          gh release upload $tag "release/ForgeLink-Setup.exe" "release/ForgeLink-Setup.exe.sha256" --repo "${{ github.repository }}" --clobber
